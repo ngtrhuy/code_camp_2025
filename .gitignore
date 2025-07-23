@@ -1,0 +1,65 @@
+# ------------------------
+# .NET & ASP.NET Core
+# ------------------------
+bin/
+obj/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vscode/
+.vs/
+*.dbmdl
+*.pdb
+
+# ASP.NET Core Secrets
+secrets.json
+
+# Logs
+*.log
+
+# Publish output
+publish/
+wwwroot/dist/
+wwwroot/static/
+
+# Environment files
+*.env
+*.env.*
+
+# ------------------------
+# Node.js / React (TypeScript)
+# ------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+build/
+dist/
+
+# Test coverage
+coverage/
+*.lcov
+
+# React Dev Tools
+.react-devtools-profile*
+
+# TypeScript
+*.tsbuildinfo
+
+# ------------------------
+# OS Specific
+# ------------------------
+.DS_Store
+Thumbs.db
+
+# ------------------------
+# Package Lock Files (Optional: Only if you want to force yarn/npm consistency)
+# ------------------------
+# yarn.lock
+# package-lock.json
