@@ -1,0 +1,6 @@
+@TouristApp_HostAddress = http://localhost:5110
+
+GET {{TouristApp_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
