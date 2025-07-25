@@ -15,11 +15,24 @@ namespace TouristApp.Controllers
             _crawlService = crawlService;
         }
 
+        /// <summary>
+        /// API chỉ crawl dữ liệu từ trang web (không insert DB)
+        /// </summary>
         [HttpGet("tours")]
-        public async Task<ActionResult<List<PystravelTourModel>>> GetTours()
+        public async Task<ActionResult<List<StandardTourModel>>> GetTours()
         {
             var tours = await _crawlService.GetToursAsync();
             return Ok(tours);
+        }
+
+        /// <summary>
+        /// API vừa crawl vừa insert vào database
+        /// </summary>
+        [HttpPost("insert")]
+        public async Task<IActionResult> CrawlAndInsertTours()
+        {
+            await _crawlService.GetToursAsync(insertToDb: true);
+            return Ok(new { message = "✅ Crawl & Insert thành công vào database." });
         }
     }
 }

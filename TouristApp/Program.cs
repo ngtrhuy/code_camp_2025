@@ -1,4 +1,4 @@
-
+﻿
 using TouristApp.Services;
 
 namespace TouristApp
@@ -16,6 +16,9 @@ namespace TouristApp
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
             builder.Services.AddHttpClient<PystravelCrawlService>();
+           // builder.Services.AddScoped<MySqlTourRepository>();
+       
+            builder.Services.AddHttpClient(); // nếu chưa có
 
             var app = builder.Build();
 
