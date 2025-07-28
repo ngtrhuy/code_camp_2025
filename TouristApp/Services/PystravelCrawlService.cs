@@ -2,6 +2,7 @@
 using MySql.Data.MySqlClient;
 using MySqlConnector;
 using TouristApp.Models;
+using TouristApp.Services;
 using MySqlCommand = MySqlConnector.MySqlCommand;
 using MySqlConnection = MySqlConnector.MySqlConnection;
 
@@ -208,4 +209,3 @@ namespace TouristApp.Services
         }
     }
 }
-6y

@@ -1,5 +1,6 @@
-﻿
+
 using TouristApp.Services;
+using TouristApp.Services.LuaViet;
 
 namespace TouristApp
 {
@@ -16,9 +17,17 @@ namespace TouristApp
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
             builder.Services.AddHttpClient<PystravelCrawlService>();
-           // builder.Services.AddScoped<MySqlTourRepository>();
-       
-            builder.Services.AddHttpClient(); // nếu chưa có
+            builder.Services.AddHttpClient<LuaVietTourCrawler>();
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAll",
+                    policy =>
+                    {
+                        policy.AllowAnyOrigin()
+                              .AllowAnyMethod()
+                              .AllowAnyHeader();
+                    });
+            });
 
             var app = builder.Build();
 
@@ -28,9 +37,8 @@ namespace TouristApp
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
-
             app.UseHttpsRedirection();
-
+            app.UseCors("AllowAll");
             app.UseAuthorization();
 
 
