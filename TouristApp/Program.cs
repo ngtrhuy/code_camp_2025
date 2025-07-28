@@ -16,6 +16,7 @@ namespace TouristApp
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
+            builder.Services.AddHttpClient<DeVietTourCrawler>();
             builder.Services.AddHttpClient<PystravelCrawlService>();
             builder.Services.AddHttpClient<LuaVietTourCrawler>();
             builder.Services.AddCors(options =>
