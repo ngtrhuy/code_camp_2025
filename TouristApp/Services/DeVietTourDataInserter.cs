@@ -13,7 +13,7 @@ namespace TouristApp.Services
             _connectionString = connectionString;
         }
 
-        public async Task InsertToursAsync(List<DeVietTourInfo> tours)
+        public async Task InsertToursAsync(List<StandardTourModel> tours)
         {
             using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();

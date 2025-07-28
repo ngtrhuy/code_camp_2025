@@ -30,7 +30,7 @@ namespace TouristApp.Controllers
                 "https://deviet.vn/du-lich/tour-nuoc-ngoai/"
             };
 
-            var allTours = new List<DeVietTourInfo>();
+            var allTours = new List<StandardTourModel>();
 
             foreach (var url in urls)
             {
@@ -51,7 +51,7 @@ namespace TouristApp.Controllers
                 "https://deviet.vn/du-lich/tour-nuoc-ngoai/"
             };
 
-            var allTours = new List<DeVietTourInfo>();
+            var allTours = new List<StandardTourModel>();
 
             foreach (var url in urls)
             {
@@ -137,7 +137,7 @@ namespace TouristApp.Controllers
 
         // ✅ API cập nhật tour theo id
         [HttpPut("tours/{id}")]
-        public IActionResult UpdateTour(int id, [FromBody] DeVietTourInfo tour)
+        public IActionResult UpdateTour(int id, [FromBody] StandardTourModel tour)
         {
             using var connection = new MySqlConnection(_connectionString);
             connection.Open();

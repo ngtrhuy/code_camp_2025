@@ -5,9 +5,9 @@ namespace TouristApp.Services
 {
     public class DeVietTourCrawler
     {
-        public async Task<List<DeVietTourInfo>> CrawlToursAsync(string categoryUrl)
+        public async Task<List<StandardTourModel>> CrawlToursAsync(string categoryUrl)
         {
-            var tourList = new List<DeVietTourInfo>();
+            var tourList = new List<StandardTourModel>();
             var web = new HtmlWeb();
             var doc = await Task.Run(() => web.Load(categoryUrl));
 
@@ -26,7 +26,7 @@ namespace TouristApp.Services
                     var detailUrl = titleNode?.GetAttributeValue("href", string.Empty);
                     if (string.IsNullOrEmpty(detailUrl)) continue;
 
-                    var tour = new DeVietTourInfo
+                    var tour = new StandardTourModel
                     {
                         TourName = HtmlEntity.DeEntitize(titleNode?.InnerText?.Trim() ?? ""),
                         Price = priceNode?.InnerText?.Trim() ?? "",
@@ -47,7 +47,7 @@ namespace TouristApp.Services
             return tourList;
         }
 
-        public async Task CrawlTourDetailAsync(DeVietTourInfo tour)
+        public async Task CrawlTourDetailAsync(StandardTourModel tour)
         {
             var web = new HtmlWeb();
             var doc = await Task.Run(() => web.Load(tour.TourDetailUrl));
