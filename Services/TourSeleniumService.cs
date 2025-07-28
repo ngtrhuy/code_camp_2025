@@ -4,114 +4,77 @@ using OpenQA.Selenium.Support.UI;
 
 namespace TouristApp.Services
 {
-    public class TourListItem
-    {
-        public string Url { get; set; } = "";
-        public string ImageUrl { get; set; } = "";
-        public string DepartureLocation { get; set; } = "";
-        public string Duration { get; set; } = "";
-    }
-
     public class TourSeleniumService
     {
-        public async Task<List<TourListItem>> GetAllTourItemsAsync(string url, int maxTours = 400)
+        public async Task<List<string>> GetAllTourUrlsAsync(string url)
         {
-            var result = new List<TourListItem>();
+            var urls = new List<string>();
 
             var options = new ChromeOptions();
-            options.AddArgument("--headless");
+            options.AddArgument("--headless");  // chạy ngầm
             options.AddArgument("--disable-gpu");
             options.AddArgument("--no-sandbox");
 
             using var driver = new ChromeDriver(options);
             driver.Navigate().GoToUrl(url);
 
-            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(20));
-            wait.Until(d => d.FindElements(By.CssSelector(".bpv-box-item, li.bpv-list-item.tour-ids")).Count > 0);
+            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
+            wait.Until(d => d.FindElements(By.CssSelector(".bpv-box-item")).Count > 0);
 
+            int maxRetry = 3;
             int retryCount = 0;
-            int clickCount = 0;
 
             while (true)
             {
-                var currentCount = driver.FindElements(By.CssSelector(".bpv-box-item, li.bpv-list-item.tour-ids")).Count;
+                var before = driver.FindElements(By.CssSelector(".bpv-box-item")).Count;
 
-                if (currentCount >= maxTours)
-                    break;
+                try
+                {
+                    var button = wait.Until(d =>
+                    {
+                        var element = d.FindElement(By.CssSelector(".btn-more-tour"));
+                        return (element.Displayed && element.Enabled) ? element : null;
+                    });
 
-                var button = driver.FindElements(By.CssSelector(".btn-more-tour:not([id='btn_more_selected_tour'])")).FirstOrDefault();
-                if (button == null || !button.Displayed || !button.Enabled)
-                    break;
+                    ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", button);
+                    ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", button);
 
-                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", button);
-                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", button);
-                clickCount++;
+                    await Task.Delay(1500); // chờ load thêm dữ liệu
+                }
+                catch (WebDriverTimeoutException)
+                {
+                    break; // không còn nút
+                }
 
-                await Task.Delay(2500);
+                var after = driver.FindElements(By.CssSelector(".bpv-box-item")).Count;
 
-                var newCount = driver.FindElements(By.CssSelector(".bpv-box-item, li.bpv-list-item.tour-ids")).Count;
-                if (newCount == currentCount)
+                if (after == before)
                 {
                     retryCount++;
-                    if (retryCount >= 3) break;
                 }
                 else
                 {
                     retryCount = 0;
                 }
+
+                if (retryCount >= maxRetry)
+                    break;
             }
 
-            var tourNodes = driver.FindElements(By.CssSelector(".bpv-box-item, li.bpv-list-item.tour-ids"));
-            var baseUri = new Uri(url);
-
-            foreach (var node in tourNodes.Take(maxTours))
+            // ✅ Lấy danh sách URL tour
+            var tourNodes = driver.FindElements(By.CssSelector(".bpv-box-item a.item-name"));
+            foreach (var node in tourNodes)
             {
-                var item = new TourListItem();
-
-                try
+                var href = node.GetAttribute("href");
+                if (!string.IsNullOrEmpty(href))
                 {
-                    var linkNode = node.FindElement(By.CssSelector("a.item-name"));
-                    item.Url = linkNode.GetAttribute("href");
-                }
-                catch
-                {
-                    try
-                    {
-                        var imgDiv = node.FindElement(By.CssSelector(".col-img"));
-                        item.Url = imgDiv.GetAttribute("data-go-url");
-                    }
-                    catch { }
-                }
-
-                try
-                {
-                    var img = node.FindElement(By.CssSelector("img"));
-                    item.ImageUrl = img.GetAttribute("data-src") ?? img.GetAttribute("src") ?? "";
-                }
-                catch { }
-
-                try
-                {
-                    item.DepartureLocation = node.FindElement(By.CssSelector(".route"))?.Text ?? "";
-                }
-                catch { }
-
-                try
-                {
-                    item.Duration = node.FindElement(By.CssSelector(".block-duration"))?.Text ?? "";
-                }
-                catch { }
-
-                if (!string.IsNullOrEmpty(item.Url))
-                {
-                    if (!item.Url.StartsWith("http"))
-                        item.Url = $"{baseUri.Scheme}://{baseUri.Host}{item.Url}";
-
-                    result.Add(item);
+                    if (!href.StartsWith("http"))
+                        href = "https://www.bestprice.vn" + href;
+                    urls.Add(href);
                 }
             }
 
-            return result.DistinctBy(i => i.Url).ToList();
+            return urls;
         }
     }
 }

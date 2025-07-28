@@ -33,27 +33,5 @@ namespace TouristApp.Controllers
             var tours = await _scraper.GetToursUsingSeleniumAsync(seleniumService, url);
             return Ok(tours);
         }
-        // TourController.cs
-        [HttpGet("import")]
-        public async Task<IActionResult> ImportTours(
-            [FromQuery] string url,
-            [FromServices] TourSeleniumService seleniumService,
-            [FromServices] TourImportService importService)
-        {
-            if (string.IsNullOrWhiteSpace(url))
-                url = "https://www.bestprice.vn/tour";
-
-            // Lấy dữ liệu tour
-            var tours = await _scraper.GetToursUsingSeleniumAsync(seleniumService, url);
-
-            // Import vào database
-            await importService.ImportTours(tours);
-
-            return Ok(new
-            {
-                Message = "Import thành công",
-                Count = tours.Count
-            });
-        }
     }
 }

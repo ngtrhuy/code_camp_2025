@@ -1,17 +1,17 @@
-﻿// ✅ FILE: TourScraperService.cs
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using TouristApp.Models;
+using static TouristApp.Models.TourModel;
 
 namespace TouristApp.Services
 {
     public class TourScraperService
     {
-        public async Task<List<StandardTourModel>> GetToursAsync(string url)
+        public async Task<List<TourModel>> GetToursAsync(string url)
         {
-            var result = new List<StandardTourModel>();
+            var result = new List<TourModel>();
             var html = await LoadPageHtmlAsync(url);
 
             var htmlDoc = new HtmlDocument();
@@ -28,15 +28,10 @@ namespace TouristApp.Services
                         var titleNode = node.SelectSingleNode(".//a[@class='item-name']");
                         var detailUrl = "https://www.bestprice.vn" + titleNode?.GetAttributeValue("href", "");
 
-                        var route = CleanText(node.SelectSingleNode(".//div[contains(@class,'route')]")?.InnerText);
-                        var duration = CleanText(node.SelectSingleNode(".//div[contains(@class,'block-duration')]")?.InnerText);
-                        var imgNode = node.SelectSingleNode(".//img");
-                        var img = imgNode?.GetAttributeValue("data-src", "") ?? imgNode?.GetAttributeValue("src", "");
-
                         var web = new HtmlWeb();
                         var detailDoc = web.Load(detailUrl);
 
-                        var tour = ParseTourDetail(detailDoc, detailUrl, id, route, duration, img);
+                        var tour = ParseTourDetail(detailDoc, detailUrl, id);
                         result.Add(tour);
                     }
                     catch
@@ -48,19 +43,19 @@ namespace TouristApp.Services
             return result;
         }
 
-        public async Task<List<StandardTourModel>> GetToursUsingSeleniumAsync(TourSeleniumService seleniumService, string url)
+        public async Task<List<TourModel>> GetToursUsingSeleniumAsync(TourSeleniumService seleniumService, string url)
         {
-            var result = new List<StandardTourModel>();
-            var tourItems = await seleniumService.GetAllTourItemsAsync(url);
+            var result = new List<TourModel>();
+            var urls = await seleniumService.GetAllTourUrlsAsync(url);
 
-            foreach (var item in tourItems)
+            foreach (var tourUrl in urls)
             {
                 try
                 {
                     var web = new HtmlWeb();
-                    var detailDoc = web.Load(item.Url);
+                    var detailDoc = web.Load(tourUrl);
 
-                    var tour = ParseTourDetail(detailDoc, item.Url, "", item.DepartureLocation, item.Duration, item.ImageUrl);
+                    var tour = ParseTourDetail(detailDoc, tourUrl);
                     result.Add(tour);
                 }
                 catch
@@ -68,31 +63,32 @@ namespace TouristApp.Services
                     continue;
                 }
             }
-
             return result;
         }
 
-        private StandardTourModel ParseTourDetail(HtmlDocument detailDoc, string url, string id = "", string routeFromList = "", string durationFromList = "", string imageFromList = "")
+        private TourModel ParseTourDetail(HtmlDocument detailDoc, string url, string id = "")
         {
             var name = CleanText(detailDoc.DocumentNode.SelectSingleNode("//h1")?.InnerText);
 
-            var img = !string.IsNullOrEmpty(imageFromList)
-                ? imageFromList
-                : detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'col-img')]//img")?.GetAttributeValue("data-src", "") ??
-                  detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'col-img')]//img")?.GetAttributeValue("src", "") ??
-                  detailDoc.DocumentNode.SelectSingleNode("//img")?.GetAttributeValue("src", "");
+            // ✅ Lấy ảnh từ data-src hoặc src
+            var imgNode = detailDoc.DocumentNode.SelectSingleNode("//img[contains(@class,'img-fluid')]")
+                          ?? detailDoc.DocumentNode.SelectSingleNode("//img");
+            var img = imgNode?.GetAttributeValue("data-src", "") ?? imgNode?.GetAttributeValue("src", "");
 
-            var price = CleanText(detailDoc.DocumentNode.SelectSingleNode("//span[contains(@class,'sale_price')]")?.InnerText);
+            var route = CleanText(detailDoc.DocumentNode.SelectSingleNode("//div[@class='route']")?.InnerText);
+            var duration = CleanText(detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'block-duration')]")?.InnerText);
+            var priceOld = CleanText(detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'price-origin')]")?.InnerText);
+            var priceNew = CleanText(detailDoc.DocumentNode.SelectSingleNode("//span[contains(@class,'sale_price')]")?.InnerText);
 
-            var route = !string.IsNullOrEmpty(routeFromList)
-                ? routeFromList
-                : CleanText(detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'route')]")?.InnerText);
+            var reviewScore = CleanText(detailDoc.DocumentNode.SelectSingleNode("//span[contains(@class,'score_review')]")?.InnerText);
+            var reviewText = CleanText(detailDoc.DocumentNode.SelectSingleNode("//span[contains(@class,'text-excellent')]")?.InnerText);
+            var reviewCount = CleanText(detailDoc.DocumentNode.SelectSingleNode("//span[contains(@class,'total_review')]")?.InnerText);
 
-            var duration = !string.IsNullOrEmpty(durationFromList)
-                ? durationFromList
-                : CleanText(detailDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'block-duration')]")?.InnerText);
+            var promotion = CleanText(detailDoc.DocumentNode.SelectSingleNode("//p[contains(@class,'text-special')]")?.InnerText);
+            var gift = CleanText(detailDoc.DocumentNode.SelectSingleNode("//p[contains(@class,'text-promotion-free')]")?.InnerText);
 
-            var schedule = new List<TourScheduleItem>();
+            // Lấy Itinerary
+            var itinerary = new List<TourItineraryItem>();
             var itineraryBoxes = detailDoc.DocumentNode.SelectNodes("//div[contains(@class, 'itinerary-box')]");
             if (itineraryBoxes != null)
             {
@@ -107,33 +103,44 @@ namespace TouristApp.Services
                             .Select(n => CleanText(n.InnerText))
                             .Where(text => !string.IsNullOrWhiteSpace(text)));
 
-                        schedule.Add(new TourScheduleItem
+                        itinerary.Add(new TourItineraryItem
                         {
                             DayTitle = dayTitle,
-                            DayContent = description
+                            Description = description
                         });
                     }
                 }
             }
 
-            var importantNotes = new Dictionary<string, string>();
+            // Service Policies
+            var servicePolicies = new Dictionary<string, List<string>>();
             void ExtractPolicy(string idName, string title)
             {
                 var section = detailDoc.DocumentNode.SelectSingleNode($"//div[@id='{idName}']");
                 if (section != null)
                 {
-                    var text = CleanText(section.InnerText);
-                    if (!string.IsNullOrWhiteSpace(text))
-                        importantNotes[title] = text;
+                    var items = section.SelectNodes(".//li | .//td")
+                         ?.Select(n => CleanText(n.InnerText))
+                         .Where(text => !string.IsNullOrWhiteSpace(text))
+                         .ToList();
+
+                    if (items != null && items.Count > 0)
+                        servicePolicies[title] = items;
+                    else
+                    {
+                        var text = CleanText(section.InnerText);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            servicePolicies[title] = new List<string> { text };
+                    }
                 }
             }
-
             ExtractPolicy("service_inclusion", "Giá bao gồm");
             ExtractPolicy("service_exclusion", "Không bao gồm");
             ExtractPolicy("cancellation_policy", "Huỷ / Đổi tour");
             ExtractPolicy("children_policy_title", "Trẻ em / Em bé");
             ExtractPolicy("visa_information", "Thông tin Visa");
 
+            // Departure Dates
             var departureDates = new List<string>();
             var departureNodes = detailDoc.DocumentNode.SelectNodes("//ul[contains(@class,'list-depart-date')]/li");
             if (departureNodes != null)
@@ -157,18 +164,24 @@ namespace TouristApp.Services
                 }
             }
 
-            return new StandardTourModel
+            return new TourModel
             {
-                TourName = name,
-                TourCode = id,
-                Price = price,
+                Id = id,
+                Name = name,
+                Url = url,
                 ImageUrl = img,
-                DepartureLocation = route,
+                Route = route,
                 Duration = duration,
-                TourDetailUrl = url,
-                DepartureDates = departureDates,
-                Schedule = schedule,
-                ImportantNotes = importantNotes
+                PriceOld = priceOld,
+                PriceNew = priceNew,
+                ReviewScore = reviewScore,
+                ReviewText = reviewText,
+                ReviewCount = reviewCount,
+                Promotion = promotion,
+                Gift = gift,
+                Itinerary = itinerary,
+                ServicePolicies = servicePolicies,
+                DepartureDates = departureDates
             };
         }
 
