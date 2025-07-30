@@ -77,9 +77,9 @@ namespace TouristApp.Services
 
                     if (!string.IsNullOrEmpty(dayTitle) && !string.IsNullOrEmpty(dayContent))
                     {
-                        tour.Schedule.Add(new TourScheduleItem
+                        tour.Schedules.Add(new TourScheduleItem
                         {
-                            Id = tour.Schedule.Count + 1,
+                            Id = tour.Schedules.Count + 1,
                             DayTitle = HtmlEntity.DeEntitize(dayTitle),
                             DayContent = HtmlEntity.DeEntitize(dayContent)
                         });

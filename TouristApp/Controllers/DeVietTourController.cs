@@ -1,6 +1,10 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Fizzler.Systems.HtmlAgilityPack;
+using HtmlAgilityPack;
+using Microsoft.AspNetCore.Mvc;
 using MySql.Data.MySqlClient;
+using Newtonsoft.Json.Linq;
 using System.Data;
+using System.Text.RegularExpressions;
 using TouristApp.Models;
 using TouristApp.Services;
 
@@ -19,6 +23,19 @@ namespace TouristApp.Controllers
             _crawler = new DeVietTourCrawler();
             _inserter = new DeVietTourDataInserter(_connectionString);
         }
+
+        //string GetCleanText(HtmlNode node, string selector)
+        //{
+        //    var text = node.QuerySelector(selector)?.InnerText ?? "";
+        //    return Regex.Replace(text, @"\s+", " ").Trim();
+        //}
+
+        //string GetAttr(HtmlNode node, string selector, string attr)
+        //{
+        //    return string.IsNullOrWhiteSpace(selector)
+        //        ? ""
+        //        : node.QuerySelector(selector)?.GetAttributeValue(attr, "") ?? "";
+        //}
 
         [HttpGet("crawl")]
         public async Task<IActionResult> CrawlTours()
@@ -68,7 +85,6 @@ namespace TouristApp.Controllers
             });
         }
 
-        // ✅ API Lấy danh sách Tours
         [HttpGet("tours")]
         public IActionResult GetTours()
         {
@@ -103,7 +119,6 @@ namespace TouristApp.Controllers
             return Ok(tours);
         }
 
-        // ✅ API Lấy danh sách Schedule theo tour_id
         [HttpGet("schedules/{tourId}")]
         public IActionResult GetSchedulesByTourId(int tourId)
         {
@@ -135,7 +150,6 @@ namespace TouristApp.Controllers
             return Ok(schedules);
         }
 
-        // ✅ API cập nhật tour theo id
         [HttpPut("tours/{id}")]
         public IActionResult UpdateTour(int id, [FromBody] StandardTourModel tour)
         {
@@ -175,7 +189,6 @@ namespace TouristApp.Controllers
             return Ok(new { Message = "Cập nhật tour thành công", AffectedRows = rows });
         }
 
-        // ✅ API cập nhật lịch trình theo id
         [HttpPut("schedules/{id}")]
         public IActionResult UpdateSchedule(int id, [FromBody] TourScheduleItem schedule)
         {
@@ -195,7 +208,7 @@ namespace TouristApp.Controllers
             var rows = command.ExecuteNonQuery();
             return Ok(new { Message = "Cập nhật lịch trình thành công", AffectedRows = rows });
         }
-        // ✅ API xóa tour và toàn bộ lịch trình liên quan
+
         [HttpDelete("tours/{id}")]
         public IActionResult DeleteTourAndSchedules(int id)
         {
@@ -205,12 +218,10 @@ namespace TouristApp.Controllers
 
             try
             {
-                // Xóa lịch trình trước
                 var deleteSchedules = new MySqlCommand("DELETE FROM schedules WHERE tour_id = @Id", connection, transaction);
                 deleteSchedules.Parameters.AddWithValue("@Id", id);
                 deleteSchedules.ExecuteNonQuery();
 
-                // Sau đó xóa tour
                 var deleteTour = new MySqlCommand("DELETE FROM tours WHERE id = @Id", connection, transaction);
                 deleteTour.Parameters.AddWithValue("@Id", id);
                 var affectedRows = deleteTour.ExecuteNonQuery();
