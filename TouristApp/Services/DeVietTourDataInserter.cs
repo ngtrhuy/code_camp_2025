@@ -101,7 +101,7 @@ namespace TouristApp.Services
                 }
 
                 // Insert schedules
-                foreach (var scheduleItem in tour.Schedule ?? new List<TourScheduleItem>())
+                foreach (var scheduleItem in tour.Schedules ?? new List<TourScheduleItem>())
                 {
                     if (string.IsNullOrWhiteSpace(scheduleItem.DayTitle) && string.IsNullOrWhiteSpace(scheduleItem.DayContent))
                         continue;
