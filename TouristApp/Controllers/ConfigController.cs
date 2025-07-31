@@ -20,44 +20,57 @@ namespace TouristApp.Controllers
 
         // GET: api/config/pageconfigs
         [HttpGet("pageconfigs")]
-        public IActionResult GetPageConfigs()
+        public IActionResult GetPageConfigs([FromQuery] string? crawlType)
         {
             var configs = new List<object>();
 
             using (var connection = new MySqlConnection(_connectionString))
             {
                 connection.Open();
-                var query = "SELECT * FROM page_config";
+
+                string query = "SELECT * FROM page_config";
+                if (!string.IsNullOrEmpty(crawlType))
+                {
+                    query += " WHERE crawl_type = @CrawlType";
+                }
 
                 using (var command = new MySqlCommand(query, connection))
-                using (var reader = command.ExecuteReader())
                 {
-                    while (reader.Read())
+                    if (!string.IsNullOrEmpty(crawlType))
                     {
-                        configs.Add(new
+                        command.Parameters.AddWithValue("@CrawlType", crawlType);
+                    }
+
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
                         {
-                            Id = reader["id"],
-                            BaseDomain = reader["base_domain"],
-                            BaseUrl = reader["base_url"],
-                            TourName = reader["tour_name"],
-                            TourCode = reader["tour_code"],
-                            TourPrice = reader["tour_price"],
-                            ImageUrl = reader["image_url"],
-                            DepartureLocation = reader["departure_location"],
-                            DepartureDate = reader["departure_date"],
-                            TourDuration = reader["tour_duration"],
-                            TourDetailUrl = reader["tour_detail_url"],
-                            TourDetailDayTitle = reader["tour_detail_day_title"],
-                            TourDetailDayContent = reader["tour_detail_day_content"],
-                            TourDetailNote = reader["tour_detail_note"],
-                            CrawlType = reader["crawl_type"]
-                        });
+                            configs.Add(new
+                            {
+                                Id = reader["id"],
+                                BaseDomain = reader["base_domain"],
+                                BaseUrl = reader["base_url"],
+                                TourName = reader["tour_name"],
+                                TourCode = reader["tour_code"],
+                                TourPrice = reader["tour_price"],
+                                ImageUrl = reader["image_url"],
+                                DepartureLocation = reader["departure_location"],
+                                DepartureDate = reader["departure_date"],
+                                TourDuration = reader["tour_duration"],
+                                TourDetailUrl = reader["tour_detail_url"],
+                                TourDetailDayTitle = reader["tour_detail_day_title"],
+                                TourDetailDayContent = reader["tour_detail_day_content"],
+                                TourDetailNote = reader["tour_detail_note"],
+                                CrawlType = reader["crawl_type"]
+                            });
+                        }
                     }
                 }
             }
 
             return Ok(configs);
         }
+
 
         // POST: api/config/pageconfigs
         [HttpPost("pageconfigs")]
