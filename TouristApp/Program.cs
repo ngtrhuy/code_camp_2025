@@ -1,6 +1,5 @@
 
 using TouristApp.Services;
-using TouristApp.Services.LuaViet;
 
 namespace TouristApp
 {
