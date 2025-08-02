@@ -13,7 +13,7 @@
         public List<string> DepartureDates { get; set; } = new List<string>();
         public Dictionary<string, string> ImportantNotes { get; set; } = new Dictionary<string, string>();
 
-        public List<TourScheduleItem> Schedules { get; set; } = new List<TourScheduleItem>();
+        public List<TourScheduleItem> Schedule { get; set; } = new List<TourScheduleItem>();
     }
 
     public class TourScheduleItem
