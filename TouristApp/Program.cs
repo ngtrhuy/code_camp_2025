@@ -1,4 +1,7 @@
-﻿namespace TouristApp
+
+using TouristApp.Services;
+
+namespace TouristApp
 {
     public class Program
     {
@@ -7,19 +10,23 @@
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
+
             builder.Services.AddControllers();
+            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
-
-            // ✅ Cấu hình CORS
+            builder.Services.AddHttpClient<DeVietTourCrawler>();
+            builder.Services.AddHttpClient<PystravelCrawlService>();
+            builder.Services.AddHttpClient<LuaVietTourCrawler>();
             builder.Services.AddCors(options =>
             {
-                options.AddDefaultPolicy(policy =>
-                {
-                    policy.AllowAnyOrigin()
-                          .AllowAnyHeader()
-                          .AllowAnyMethod();
-                });
+                options.AddPolicy("AllowAll",
+                    policy =>
+                    {
+                        policy.AllowAnyOrigin()
+                              .AllowAnyMethod()
+                              .AllowAnyHeader();
+                    });
             });
 
             var app = builder.Build();
@@ -30,13 +37,10 @@
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
-
             app.UseHttpsRedirection();
-
-            // ✅ Bổ sung middleware CORS trước UseAuthorization
-            app.UseCors();
-
+            app.UseCors("AllowAll");
             app.UseAuthorization();
+
 
             app.MapControllers();
 
