@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using TouristApp.Services;
 using TouristApp.Models;
+using TouristApp.Services;
 
 namespace TouristApp.Controllers
 {
@@ -8,22 +8,111 @@ namespace TouristApp.Controllers
     [ApiController]
     public class GenericCrawlController : ControllerBase
     {
+        private readonly IConfiguration _configuration;
+        private readonly string _connectionString;
+        private readonly TourRepository _tourRepository;
+
+        public GenericCrawlController(IConfiguration configuration)
+        {
+            _configuration = configuration;
+            _connectionString = _configuration.GetConnectionString("DefaultConnection");
+            _tourRepository = new TourRepository(configuration); // Khởi tạo repository
+        }
+
+        // ✅ Crawl và lưu DB
+        [HttpGet("crawl-and-save/{id}")]
+        public IActionResult CrawlAndSave(int id)
+        {
+            var config = GetConfigById(id);
+            if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+
+            var service = new SeleniumCrawlService();
+            var tours = service.CrawlToursWithSelenium(config);
+            int savedCount = _tourRepository.SaveTours(tours);
+
+            return Ok(new
+            {
+                message = "✅ Đã crawl và lưu vào DB",
+                totalCrawled = tours.Count,
+                totalSaved = savedCount
+            });
+        }
+
+        // ✅ Crawl không lưu DB
+        [HttpGet("crawl-only/{id}")]
+        public IActionResult GetToursOnly(int id)
+        {
+            var config = GetConfigById(id);
+            if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+
+            var service = new SeleniumCrawlService();
+            var tours = service.CrawlToursWithSelenium(config);
+
+            return Ok(new
+            {
+                message = "✅ Đã crawl dữ liệu thành công",
+                totalCrawled = tours.Count,
+                tours
+            });
+        }
+
+        // ✅ Hàm load config từ DB
+        private PageConfigModel? GetConfigById(int id)
+        {
+            PageConfigModel? config = null;
+            using (var conn = new MySql.Data.MySqlClient.MySqlConnection(_connectionString))
+            {
+                conn.Open();
+                var cmd = new MySql.Data.MySqlClient.MySqlCommand("SELECT * FROM page_config WHERE id = @Id", conn);
+                cmd.Parameters.AddWithValue("@Id", id);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    config = new PageConfigModel
+                    {
+                        Id = Convert.ToInt32(reader["id"]),
+                        BaseDomain = reader["base_domain"].ToString()!,
+                        BaseUrl = reader["base_url"].ToString()!,
+                        TourName = reader["tour_name"].ToString()!,
+                        TourCode = reader["tour_code"].ToString()!,
+                        TourPrice = reader["tour_price"].ToString()!,
+                        ImageUrl = reader["image_url"].ToString()!,
+                        DepartureLocation = reader["departure_location"].ToString()!,
+                        DepartureDate = reader["departure_date"].ToString()!,
+                        TourDuration = reader["tour_duration"].ToString()!,
+                        PagingType = reader["paging_type"].ToString()!,
+                        TourDetailUrl = reader["tour_detail_url"].ToString()!,
+                        TourDetailDayTitle = reader["tour_detail_day_title"].ToString()!,
+                        TourDetailDayContent = reader["tour_detail_day_content"].ToString()!,
+                        TourDetailNote = reader["tour_detail_note"].ToString()!,
+                        CrawlType = reader["crawl_type"].ToString()!,
+                        TourListSelector = reader["tour_list_selector"].ToString()!,
+                        ImageAttr = reader["image_attr"].ToString()!,
+                        TourDetailAttr = reader["tour_detail_attr"].ToString()!,
+                        LoadMoreButtonSelector = reader["load_more_button_selector"].ToString()!,
+                        LoadMoreType = reader["load_more_type"].ToString()!
+                    };
+                }
+            }
+            return config;
+        }
+
+        // ✅ Generic crawl từ config (dùng service factory)
         [HttpGet("{configId}")]
         public async Task<IActionResult> Crawl(int configId)
         {
             try
             {
-                // Load config để xác định loại crawl
                 var tempService = new GenericCrawlServiceServerSide(); // Tạm thời để load config
                 var config = await tempService.LoadPageConfig(configId);
-                
+
                 if (config == null)
                     return NotFound("Không tìm thấy cấu hình crawl.");
 
-                // Tạo service phù hợp dựa trên crawl_type
                 var crawlService = CrawlServiceFactory.CreateCrawlService(config);
                 var data = await crawlService.CrawlFromPageConfigAsync(configId);
-                
+
                 if (data.Count == 0)
                     return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
 
@@ -40,6 +129,7 @@ namespace TouristApp.Controllers
             }
         }
 
+        // ✅ Crawl server-side
         [HttpGet("server-side/{configId}")]
         public async Task<IActionResult> CrawlServerSide(int configId)
         {
@@ -47,7 +137,7 @@ namespace TouristApp.Controllers
             {
                 var service = new GenericCrawlServiceServerSide();
                 var data = await service.CrawlFromPageConfigAsync(configId);
-                
+
                 if (data.Count == 0)
                     return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
 
@@ -63,6 +153,7 @@ namespace TouristApp.Controllers
             }
         }
 
+        // ✅ Crawl client-side
         [HttpGet("client-side/{configId}")]
         public async Task<IActionResult> CrawlClientSide(int configId)
         {
@@ -70,7 +161,7 @@ namespace TouristApp.Controllers
             {
                 var service = new GenericCrawlServiceClientSide();
                 var data = await service.CrawlFromPageConfigAsync(configId);
-                
+
                 if (data.Count == 0)
                     return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
 
