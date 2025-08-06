@@ -5,6 +5,7 @@
         public int Id { get; set; }
         public string BaseDomain { get; set; } = string.Empty;
         public string BaseUrl { get; set; } = string.Empty;
+
         public string TourName { get; set; } = string.Empty;
         public string TourCode { get; set; } = string.Empty;
         public string TourPrice { get; set; } = string.Empty;
@@ -12,7 +13,7 @@
         public string DepartureLocation { get; set; } = string.Empty;
         public string DepartureDate { get; set; } = string.Empty;
         public string TourDuration { get; set; } = string.Empty;
-        public string PagingType { get; set; } = "none"; 
+        public string PagingType { get; set; } = "none";
         public string TourDetailUrl { get; set; } = string.Empty;
         public string TourDetailDayTitle { get; set; } = string.Empty;
         public string TourDetailDayContent { get; set; } = string.Empty;
@@ -22,5 +23,9 @@
         public string ImageAttr { get; set; } = "src";
         public string TourDetailAttr { get; set; } = "href";
         public DateTime CreatedAt { get; set; }
+        public string LoadMoreButtonSelector { get; set; } = string.Empty;
+        public string LoadMoreType { get; set; } = "class";
+        public int LoadMoreButtonIndex { get; set; } = -1; // -1 = chọn nút cuối, 0 = nút đầu tiên, 1 = nút thứ 2, v.v.
+
     }
 }
