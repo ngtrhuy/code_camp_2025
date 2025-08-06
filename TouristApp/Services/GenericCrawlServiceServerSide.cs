@@ -1,6 +1,7 @@
 using HtmlAgilityPack;
-using TouristApp.Models;
 using MySqlConnector;
+using System.Text.RegularExpressions;
+using TouristApp.Models;
 
 namespace TouristApp.Services
 {
@@ -21,7 +22,6 @@ namespace TouristApp.Services
 
             List<StandardTourModel> tours = new();
 
-            // ✅ Crawl danh sách bằng HtmlAgilityPack (server-side)
             var client = new HttpClient();
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0");
 
@@ -82,7 +82,6 @@ namespace TouristApp.Services
                     break;
             }
 
-            // ✅ Crawl chi tiết bằng HtmlAgilityPack
             foreach (var tour in tours)
             {
                 if (!string.IsNullOrEmpty(tour.TourDetailUrl))
@@ -122,7 +121,6 @@ namespace TouristApp.Services
 
         private void ParseTourDetailFromHtml(HtmlDocument doc, StandardTourModel tour, PageConfigModel config)
         {
-            // 📅 Lịch trình
             var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
             var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
 
@@ -138,55 +136,69 @@ namespace TouristApp.Services
                 }
             }
 
-            var noteRoots = doc.DocumentNode.SelectNodes(config.TourDetailNote);
+            var noteRoot = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
+            tour.ImportantNotes = new Dictionary<string, string>();
 
-            // Nếu là một đoạn block duy nhất (trang LuaViet)
-            if (noteRoots == null || noteRoots.Count == 0)
+            if (noteRoot != null)
             {
-                var noteRoot = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
-                if (noteRoot != null)
-                {
-                    string currentHeading = "";
-                    foreach (var child in noteRoot.ChildNodes)
-                    {
-                        if (child.NodeType != HtmlNodeType.Element) continue;
+                string currentHeading = null;
+                List<string> buffer = new List<string>();
 
-                        if (child.Name.StartsWith("h", StringComparison.OrdinalIgnoreCase))
+                foreach (var child in noteRoot.Descendants())
+                {
+                    if (child.NodeType != HtmlNodeType.Element) continue;
+
+                    if (child.Name == "strong")
+                    {
+                        // Lưu heading cũ nếu có
+                        if (currentHeading != null && buffer.Count > 0)
                         {
-                            currentHeading = HtmlEntity.DeEntitize(child.InnerText.Trim());
-                            if (!tour.ImportantNotes.ContainsKey(currentHeading))
-                            {
-                                tour.ImportantNotes[currentHeading] = "";
-                            }
+                            tour.ImportantNotes[currentHeading] = string.Join("\n", buffer).Trim();
+                            buffer.Clear();
                         }
-                        else if (!string.IsNullOrEmpty(currentHeading))
+
+                        currentHeading = HtmlEntity.DeEntitize(child.InnerText.Trim().TrimEnd(':', '.', ' '));
+                    }
+                    else if (!string.IsNullOrEmpty(currentHeading))
+                    {
+                        var text = HtmlEntity.DeEntitize(child.InnerText.Trim());
+                        if (!string.IsNullOrWhiteSpace(text))
                         {
-                            string content = HtmlEntity.DeEntitize(child.InnerText.Trim());
-                            if (!string.IsNullOrWhiteSpace(content))
-                            {
-                                tour.ImportantNotes[currentHeading] += content + "\n";
-                            }
+                            buffer.Add(text);
                         }
                     }
+                }
 
-                    foreach (var key in tour.ImportantNotes.Keys.ToList())
-                        tour.ImportantNotes[key] = tour.ImportantNotes[key].Trim();
+                // Lưu phần cuối
+                if (currentHeading != null && buffer.Count > 0)
+                {
+                    tour.ImportantNotes[currentHeading] = string.Join("\n", buffer).Trim();
                 }
             }
-            // Nếu là nhiều block khác nhau (ví dụ như trang DeViet sau khi refactor)
-            else
-            {
-                foreach (var noteRoot in noteRoots)
-                {
-                    var heading = noteRoot.SelectSingleNode(".//h3|.//h4")?.InnerText?.Trim() ?? "";
-                    var contentNode = noteRoot.SelectSingleNode(".//ul");
-                    var contentText = HtmlEntity.DeEntitize(contentNode?.InnerText?.Trim() ?? "");
 
-                    if (!string.IsNullOrEmpty(heading) && !string.IsNullOrEmpty(contentText))
-                    {
-                        if (!tour.ImportantNotes.ContainsKey(heading))
-                            tour.ImportantNotes[heading] = contentText;
-                    }
+
+
+
+
+
+
+
+            // ✅ Trích xuất ngày khởi hành từ ul.tdetail-date nếu chưa có
+            if (tour.DepartureDates == null || tour.DepartureDates.Count == 0)
+            {
+                var dateNodes = doc.DocumentNode.SelectNodes("//ul[contains(@class, 'tdetail-date')]/li");
+                if (dateNodes != null)
+                {
+                    var extractedDates = dateNodes
+                        .Select(li => li.InnerText.Trim())
+                        .Where(date => !string.IsNullOrWhiteSpace(date))
+                        .Select(date => Regex.Match(date, @"\d{1,2}/\d{1,2}").Value)
+                        .Where(date => !string.IsNullOrWhiteSpace(date))
+                        .Distinct()
+                        .ToList();
+
+                    tour.DepartureDates = extractedDates;
+                    Console.WriteLine($"📅 Lấy {extractedDates.Count} ngày khởi hành từ ul.tdetail-date cho tour: {tour.TourName}");
                 }
             }
         }
@@ -228,4 +240,4 @@ namespace TouristApp.Services
             return null;
         }
     }
-} 
+}
