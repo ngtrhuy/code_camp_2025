@@ -11,15 +11,17 @@ namespace TouristApp.Controllers
         private readonly IConfiguration _configuration;
         private readonly string _connectionString;
         private readonly TourRepository _tourRepository;
+        private readonly IHistoryRepository _history;
 
-        public GenericCrawlController(IConfiguration configuration)
+        public GenericCrawlController(IConfiguration configuration, IHistoryRepository history)
         {
             _configuration = configuration;
             _connectionString = _configuration.GetConnectionString("DefaultConnection");
-            _tourRepository = new TourRepository(configuration); // Khởi tạo repository
+            _tourRepository = new TourRepository(configuration); // Khởi tạo repository có sẵn của bạn
+            _history = history;
         }
 
-        // ✅ Crawl và lưu DB
+        // ✅ Crawl và lưu DB (không dùng history)
         [HttpGet("crawl-and-save/{id}")]
         public IActionResult CrawlAndSave(int id)
         {
@@ -38,7 +40,7 @@ namespace TouristApp.Controllers
             });
         }
 
-        // ✅ Crawl không lưu DB
+        // ✅ Crawl không lưu DB (không dùng history)
         [HttpGet("crawl-only/{id}")]
         public IActionResult GetToursOnly(int id)
         {
@@ -56,7 +58,7 @@ namespace TouristApp.Controllers
             });
         }
 
-        // ✅ Hàm load config từ DB
+        // ✅ Load config từ DB
         private PageConfigModel? GetConfigById(int id)
         {
             PageConfigModel? config = null;
@@ -98,29 +100,26 @@ namespace TouristApp.Controllers
             return config;
         }
 
-        // ✅ Generic crawl từ config (dùng service factory)
+        // ✅ Generic crawl (không dùng history)
         [HttpGet("{configId}")]
         public async Task<IActionResult> Crawl(int configId)
         {
             try
             {
-                var tempService = new GenericCrawlServiceServerSide(); // Tạm thời để load config
+                var tempService = new GenericCrawlServiceServerSide(); // chỉ để load config
                 var config = await tempService.LoadPageConfig(configId);
-
-                if (config == null)
-                    return NotFound("Không tìm thấy cấu hình crawl.");
+                if (config == null) return NotFound("Không tìm thấy cấu hình crawl.");
 
                 var crawlService = CrawlServiceFactory.CreateCrawlService(config);
                 var data = await crawlService.CrawlFromPageConfigAsync(configId);
 
-                if (data.Count == 0)
-                    return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
+                if (data.Count == 0) return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
 
                 return Ok(new
                 {
                     message = $"Crawl thành công {data.Count} tour từ {config.BaseDomain}",
                     crawl_type = config.CrawlType,
-                    data = data
+                    data
                 });
             }
             catch (Exception ex)
@@ -129,52 +128,51 @@ namespace TouristApp.Controllers
             }
         }
 
-        // ✅ Crawl server-side
+        // ✅ Crawl server-side có HISTORY: pending → done/failed (trả về historyId để FE poll)
         [HttpGet("server-side/{configId}")]
         public async Task<IActionResult> CrawlServerSide(int configId)
         {
-            try
+            // 1) tạo history pending
+            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
+
+            // 2) chạy nền để không block FE
+            _ = Task.Run(async () =>
             {
-                var service = new GenericCrawlServiceServerSide();
-                var data = await service.CrawlFromPageConfigAsync(configId);
-
-                if (data.Count == 0)
-                    return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
-
-                return Ok(new
+                try
                 {
-                    message = $"Crawl server-side thành công {data.Count} tour",
-                    data = data
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { error = $"Lỗi crawl server-side: {ex.Message}" });
-            }
+                    var service = new GenericCrawlServiceServerSide();
+                    var data = await service.CrawlFromPageConfigAsync(configId);
+                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
+                }
+                catch (Exception ex)
+                {
+                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
+                }
+            });
+
+            // 3) trả về ngay để FE mở modal & poll
+            return Ok(new { message = "Crawl started", historyId });
         }
 
-        // ✅ Crawl client-side
+        // ✅ Crawl client-side có HISTORY (nếu bạn cần)
         [HttpGet("client-side/{configId}")]
         public async Task<IActionResult> CrawlClientSide(int configId)
         {
-            try
+            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
+            _ = Task.Run(async () =>
             {
-                var service = new GenericCrawlServiceClientSide();
-                var data = await service.CrawlFromPageConfigAsync(configId);
-
-                if (data.Count == 0)
-                    return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
-
-                return Ok(new
+                try
                 {
-                    message = $"Crawl client-side thành công {data.Count} tour",
-                    data = data
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { error = $"Lỗi crawl client-side: {ex.Message}" });
-            }
+                    var service = new GenericCrawlServiceClientSide();
+                    var data = await service.CrawlFromPageConfigAsync(configId);
+                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
+                }
+                catch (Exception ex)
+                {
+                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
+                }
+            });
+            return Ok(new { message = "Crawl started", historyId });
         }
     }
 }
