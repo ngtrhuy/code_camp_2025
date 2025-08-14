@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -45,21 +45,14 @@ namespace TouristApp.Services
                 while (hasMore)
                 {
                     string pageUrl = baseUrl;
-
                     if (config.PagingType == "querystring")
-                    {
                         pageUrl += pageUrl.Contains("?") ? $"&page={currentPage}" : $"?page={currentPage}";
-                    }
-
-                    Console.WriteLine($"🔍 Trang {currentPage} URL: {pageUrl}");
 
                     var html = await client.GetStringAsync(pageUrl);
                     var doc = new HtmlDocument();
                     doc.LoadHtml(html);
 
                     var nodes = doc.DocumentNode.SelectNodes(config.TourListSelector);
-                    Console.WriteLine($"📄 Số lượng tour ở page {currentPage}: {nodes?.Count ?? 0}");
-
                     if (nodes == null || nodes.Count == 0)
                     {
                         hasMore = false;
@@ -81,18 +74,16 @@ namespace TouristApp.Services
                                 Duration = GetText(node, config.TourDuration),
                                 TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
                             };
-
                             tours.Add(tour);
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"⚠️ Lỗi parse tour ở page {currentPage}: {ex.Message}");
+                            Console.WriteLine($"⚠️ Parse tour lỗi: {ex.Message}");
                         }
                     }
 
                     currentPage++;
-                    if (config.PagingType != "querystring")
-                        break;
+                    if (config.PagingType != "querystring") break;
                 }
             }
 
@@ -103,7 +94,6 @@ namespace TouristApp.Services
                     var fullUrl = tour.TourDetailUrl.StartsWith("http")
                         ? tour.TourDetailUrl
                         : $"{config.BaseDomain.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
-
                     await CrawlDetailWithHtmlAgilityPackAsync(tour, fullUrl, config);
                 }
             }
@@ -138,7 +128,6 @@ namespace TouristApp.Services
             // ========= LỊCH TRÌNH =========
             var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
             var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
-
             if (days != null && contents != null && days.Count == contents.Count)
             {
                 for (int i = 0; i < days.Count; i++)
@@ -151,10 +140,8 @@ namespace TouristApp.Services
                 }
             }
 
-            // ========= IMPORTANT NOTES (theo UL/LI từng heading) =========
-
-            // Tiêu đề hiển thị
-            var displayTitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            // ========= IMPORTANT NOTES =========
+            var displayMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "dich vu bao gom", "DỊCH VỤ BAO GỒM" },
                 { "dich vu khong bao gom", "DỊCH VỤ KHÔNG BAO GỒM" },
@@ -163,42 +150,23 @@ namespace TouristApp.Services
                 { "quy dinh huy tour", "QUY ĐỊNH HỦY TOUR" },
             };
 
-            // => canonical hóa heading
-            string Canon(string? raw)
+            static string CanonizeHeading(string? raw)
             {
                 var x = ToAsciiLower(CleanText(raw));
-                x = Regex.Replace(x, @"[:.\s]+$", "");
-
-                // từ khóa nhận diện
-                string[][] keys =
-                {
-                    new[] { "dich vu bao gom","gia bao gom","bao gom","included","include","tour bao gom" },
-                    new[] { "dich vu khong bao gom","gia khong bao gom","khong bao gom","not included","exclude","chua bao gom" },
-                    new[] { "chi phi tre em","chinh sach tre em","tre em" },
-                    new[] { "ky hop dong & dat coc tour","ky hop dong","dat coc tour","dat coc","thanh toan & dat coc" },
-                    new[] { "quy dinh huy tour","dieu kien huy","chinh sach huy","huy tour","phi huy" },
-                };
-                string[] canons = {
-                    "dich vu bao gom","dich vu khong bao gom","chi phi tre em",
-                    "ky hop dong & dat coc tour","quy dinh huy tour"
-                };
-
-                for (int i = 0; i < keys.Length; i++)
-                    if (keys[i].Any(k => x.Contains(ToAsciiLower(k)))) return canons[i];
-
+                if (Regex.IsMatch(x, @"\b(khong|chua)\s*bao\s*gom\b|\bnot\s*include(?:d)?\b|\bexclude(?:d)?\b")) return "dich vu khong bao gom";
+                if (Regex.IsMatch(x, @"\b(bao\s*gom|gia\s*bao\s*gom|dich\s*vu\s*bao\s*gom)\b|(?<!not\s)include(?:d)?\b")) return "dich vu bao gom";
+                if (Regex.IsMatch(x, @"\b(chi\s*phi\s*tre\s*em|chinh\s*sach\s*tre\s*em|tre\s*em|em\s*be)\b")) return "chi phi tre em";
+                if (Regex.IsMatch(x, @"\b(ky|ki)\s*hop\s*dong\b|\bdat\s*coc\b|\bdat\s*coc\s*tour\b|\bthanh\s*toan\b|\bh[oô] sơ.*visa\b|\bvisa.*h[oô] sơ\b|\bl[ịi]ch\s*hẹn\b")) return "ky hop dong & dat coc tour";
+                if (Regex.IsMatch(x, @"\b(quy\s*din[h]?h\s*h[u]y\s*tour|dieu\s*kien\s*h[u]y|chinh\s*sach\s*h[u]y|h[u]y\s*tour|phi\s*h[u]y)\b")) return "quy dinh huy tour";
                 return string.Empty;
             }
 
-            // bucket: canonical -> set items để khử trùng lặp
             var bucket = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
             void Merge(string canon, IEnumerable<string> items)
             {
-                if (string.IsNullOrWhiteSpace(canon)) return;
-                if (!displayTitles.ContainsKey(canon)) return;
+                if (string.IsNullOrWhiteSpace(canon) || !displayMap.ContainsKey(canon)) return;
                 if (!bucket.TryGetValue(canon, out var set))
                     bucket[canon] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
                 foreach (var it in items)
                 {
                     var t = CleanText(it);
@@ -206,144 +174,48 @@ namespace TouristApp.Services
                 }
             }
 
-            bool IsHeadingLike(HtmlNode n)
-            {
-                if (n.NodeType != HtmlNodeType.Element) return false;
-                var name = n.Name.ToLowerInvariant();
-                if (name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6" or "strong" or "b")
-                    return true;
-
-                // <p><strong>…</strong></p>
-                if (name == "p")
-                {
-                    var strong = n.SelectSingleNode("./strong|./b");
-                    if (strong != null && CleanText(n.InnerText) == CleanText(strong.InnerText))
-                        return true;
-                }
-                return false;
-            }
-
-            IEnumerable<string> LiTexts(HtmlNode listNode)
-            {
-                var lis = listNode.SelectNodes(".//li");
-                if (lis == null || lis.Count == 0)
-                {
-                    var t = CleanText(listNode.InnerText);
-                    return string.IsNullOrWhiteSpace(t) ? Array.Empty<string>() : new[] { t };
-                }
-                return lis.Select(li => CleanText(li.InnerText)).Where(s => !string.IsNullOrWhiteSpace(s));
-            }
-
-            void WalkContainer(HtmlNode container)
-            {
-                string? currentCanon = null;
-
-                foreach (var child in container.ChildNodes.Where(x => x.NodeType == HtmlNodeType.Element))
-                {
-                    if (IsHeadingLike(child))
-                    {
-                        var headingText = child.Name.Equals("p", StringComparison.OrdinalIgnoreCase)
-                            ? (child.SelectSingleNode("./strong|./b")?.InnerText ?? child.InnerText)
-                            : child.InnerText;
-
-                        currentCanon = Canon(headingText);
-                        continue;
-                    }
-
-                    if (string.IsNullOrWhiteSpace(currentCanon)) continue;
-
-                    var tag = child.Name.ToLowerInvariant();
-                    if (tag is "ul" or "ol")
-                    {
-                        Merge(currentCanon, LiTexts(child));
-                    }
-                    else
-                    {
-                        // UL/OL lồng trong div/section
-                        var lists = child.SelectNodes(".//ul|.//ol");
-                        if (lists != null)
-                        {
-                            var tmp = new List<string>();
-                            foreach (var l in lists) tmp.AddRange(LiTexts(l));
-                            if (tmp.Count > 0) Merge(currentCanon, tmp);
-                        }
-                    }
-                }
-            }
-
-            // Tìm container theo thứ tự ưu tiên: config -> Lửa Việt -> DeViet
-            var containerCandidates = new List<string>();
+            // 1) Chọn scope
+            HtmlNode scope = doc.DocumentNode;
             if (!string.IsNullOrWhiteSpace(config.TourDetailNote))
-                containerCandidates.Add(config.TourDetailNote);
-
-            // Luaviet
-            containerCandidates.Add("//div[contains(concat(' ', normalize-space(@class), ' '), ' editor ') and contains(concat(' ', normalize-space(@class), ' '), ' cms-content ')]");
-            // DeViet
-            containerCandidates.Add("//div[contains(@class,'tdetail-pitem-wrap')]");
-
-            HtmlNode? foundContainer = null;
-            foreach (var xp in containerCandidates.Distinct())
             {
-                var n = doc.DocumentNode.SelectSingleNode(xp);
-                if (n != null) { foundContainer = n; break; }
-            }
-
-            if (foundContainer != null)
-            {
-                WalkContainer(foundContainer);
+                var byCfg = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
+                if (byCfg != null) scope = byCfg;
             }
             else
             {
-                // Fallback: quét toàn trang theo heading -> UL/OL kế tiếp
-                var heads = doc.DocumentNode.SelectNodes("//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 or self::strong or self::b or (self::p and (./strong or ./b))]");
-                if (heads != null)
+                var candidates = doc.DocumentNode.SelectNodes("//div|//section") ?? new HtmlNodeCollection(null);
+                int Score(HtmlNode n)
                 {
+                    var heads = n.SelectNodes(".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 or self::strong or self::b or (self::p and (./strong or ./b))]");
+                    if (heads == null) return 0;
+                    int ok = 0;
                     foreach (var h in heads)
                     {
-                        var headingText = h.Name.Equals("p", StringComparison.OrdinalIgnoreCase)
+                        var text = h.Name.Equals("p", StringComparison.OrdinalIgnoreCase)
                             ? h.SelectSingleNode("./strong|./b")?.InnerText ?? h.InnerText
                             : h.InnerText;
-
-                        var canon = Canon(headingText);
-                        if (string.IsNullOrWhiteSpace(canon)) continue;
-
-                        // lấy tất cả UL/OL sau heading cho tới heading kế tiếp (cùng cấp container)
-                        var items = new List<string>();
-                        var sib = h.NextSibling;
-                        while (sib != null)
-                        {
-                            if (sib.NodeType == HtmlNodeType.Element && IsHeadingLike(sib)) break;
-
-                            if (sib.NodeType == HtmlNodeType.Element)
-                            {
-                                var tag = sib.Name.ToLowerInvariant();
-                                if (tag is "ul" or "ol")
-                                    items.AddRange(LiTexts(sib));
-                                else
-                                {
-                                    var lists = sib.SelectNodes(".//ul|.//ol");
-                                    if (lists != null)
-                                        foreach (var l in lists) items.AddRange(LiTexts(l));
-                                }
-                            }
-
-                            sib = sib.NextSibling;
-                        }
-
-                        Merge(canon, items);
+                        if (!string.IsNullOrWhiteSpace(CanonizeHeading(text))) ok++;
                     }
+                    return ok;
                 }
+                var best = candidates.OrderByDescending(Score).FirstOrDefault(n => Score(n) >= 2);
+                if (best != null) scope = best;
             }
 
-            // Build kết quả HTML UL theo đúng tiêu đề hiển thị
+            // 2) Tách theo tài liệu + anchor
+            ExtractByDocumentOrder(scope, CanonizeHeading, Merge);
+
+            // 3) Hậu kiểm & tái phân phối (đặc biệt “CHI PHÍ TRẺ EM” có dính anchor khác)
+            ReclassifyMisplaced(bucket);
+
+            // 4) Build kết quả
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kv in displayTitles)
+            foreach (var kv in displayMap)
             {
-                if (!bucket.TryGetValue(kv.Key, out var items) || items.Count == 0) continue;
-                var ul = "<ul>" + string.Join("", items.Select(li => $"<li>{WebUtility.HtmlEncode(li)}</li>")) + "</ul>";
-                result[kv.Value] = ul;
+                result[kv.Value] = bucket.TryGetValue(kv.Key, out var items) && items.Count > 0
+                    ? string.Join("\n", items)
+                    : string.Empty;
             }
-
             tour.ImportantNotes = result;
 
             // ========= NGÀY KHỞI HÀNH (fallback) =========
@@ -352,17 +224,272 @@ namespace TouristApp.Services
                 var dateNodes = doc.DocumentNode.SelectNodes("//ul[contains(@class, 'tdetail-date')]/li");
                 if (dateNodes != null)
                 {
-                    var extractedDates = dateNodes
+                    tour.DepartureDates = dateNodes
                         .Select(li => li.InnerText.Trim())
-                        .Where(date => !string.IsNullOrWhiteSpace(date))
-                        .Select(date => Regex.Match(date, @"\d{1,2}/\d{1,2}").Value)
-                        .Where(date => !string.IsNullOrWhiteSpace(date))
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .Select(s => Regex.Match(s, @"\d{1,2}/\d{1,2}").Value)
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
                         .Distinct()
                         .ToList();
-
-                    tour.DepartureDates = extractedDates;
-                    Console.WriteLine($"📅 Lấy {extractedDates.Count} ngày khởi hành từ ul.tdetail-date cho tour: {tour.TourName}");
                 }
+            }
+        }
+
+        // ======== Anchor “thật”: theo sau là : ; - – — . " ” » ) hoặc hết dòng ========
+        private static readonly Regex AnchorRegex = new Regex(
+            // bao gồm
+            @"(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<inc>\b(DỊCH\s*VỤ\s*BAO\s*GỒM|GIÁ\s*BAO\s*GỒM|INCLUDED?|INCLUDE)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<exc>\b(DỊCH\s*VỤ\s*KHÔNG\s*BAO\s*GỒM|GIÁ\s*KHÔNG\s*BAO\s*GỒM|KHÔNG\s*BAO\s*GỒM|CHƯA\s*BAO\s*GỒM|NOT\s*INCLUDED?|EXCLUDED?)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<child>\b(CHI\s*PHÍ\s*TRẺ\s*EM|CHÍNH\s*SÁCH\s*TRẺ\s*EM|TRẺ\s*EM)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<contract>\b((KÝ|KÍ)\s*HỢP\s*ĐỒNG|ĐẶT\s*CỌC|CỌC\s*TIỀN|THANH\s*TOÁN|HỒ\s*SƠ.*VISA|VISA.*HỒ\s*SƠ|LỊCH\s*HẸN.*(ĐẠI\s*SỨ|LÃNH\s*SỰ))\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<cancel>\b(QUY\s*ĐỊNH\s*HỦY\s*TOUR|ĐIỀU\s*KIỆN\s*HỦY|CHÍNH\s*SÁCH\s*HỦY|HỦY\s*TOUR|PHÍ\s*HỦY)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+        private static string CanonFromMatch(Match m)
+        {
+            if (m.Groups["exc"].Success) return "dich vu khong bao gom";
+            if (m.Groups["inc"].Success) return "dich vu bao gom";
+            if (m.Groups["child"].Success) return "chi phi tre em";
+            if (m.Groups["contract"].Success) return "ky hop dong & dat coc tour";
+            if (m.Groups["cancel"].Success) return "quy dinh huy tour";
+            return string.Empty;
+        }
+
+        private static void ExtractByDocumentOrder(
+            HtmlNode scope,
+            Func<string?, string> canonizeHeading,
+            Action<string, IEnumerable<string>> merge)
+        {
+            var all = scope.DescendantsAndSelf().ToList();
+            var idx = new Dictionary<HtmlNode, int>();
+            for (int i = 0; i < all.Count; i++) idx[all[i]] = i;
+
+            bool IsHeading(HtmlNode n)
+            {
+                if (n.NodeType != HtmlNodeType.Element) return false;
+                var tag = n.Name.ToLowerInvariant();
+                if (tag is "h1" or "h2" or "h3" or "h4" or "h5" or "h6" or "strong" or "b") return true;
+                if (tag == "p")
+                {
+                    var strong = n.SelectSingleNode("./strong|./b");
+                    if (strong != null && CleanText(n.InnerText) == CleanText(strong.InnerText)) return true;
+                }
+                return false;
+            }
+
+            var heads = scope.Descendants()
+                .Where(IsHeading)
+                .Select(h =>
+                {
+                    var text = h.Name == "p"
+                        ? (h.SelectSingleNode("./strong|./b")?.InnerText ?? h.InnerText)
+                        : h.InnerText;
+                    return new { Node = h, Canon = canonizeHeading(text) };
+                })
+                .Where(x => !string.IsNullOrWhiteSpace(x.Canon))
+                .OrderBy(x => idx[x.Node])
+                .ToList();
+
+            if (heads.Count == 0) return;
+
+            for (int i = 0; i < heads.Count; i++)
+            {
+                var start = idx[heads[i].Node];
+                var end = (i + 1 < heads.Count) ? idx[heads[i + 1].Node] : int.MaxValue;
+                var currentCanon = heads[i].Canon;
+
+                IEnumerable<HtmlNode> Lists(string tag) =>
+                    scope.Descendants(tag).Where(n => idx.TryGetValue(n, out var ni) && ni > start && ni < end);
+
+                var lists = Lists("ul").Concat(Lists("ol")).ToList();
+                var hadAny = false;
+
+                if (lists.Count > 0)
+                {
+                    hadAny = true;
+                    foreach (var l in lists)
+                    {
+                        var lis = l.SelectNodes("./li");
+                        if (lis == null || lis.Count == 0)
+                        {
+                            ProcessTextChunk(CleanText(l.InnerText), currentCanon, CanonFromAnchorOrHeading, merge);
+                            continue;
+                        }
+                        foreach (var li in lis)
+                            ProcessTextChunk(CleanText(li.InnerText), currentCanon, CanonFromAnchorOrHeading, merge);
+                    }
+                }
+
+                if (!hadAny)
+                {
+                    var blocks = scope.Descendants()
+                        .Where(n => (n.Name is "p" or "div" or "section") && idx[n] > start && idx[n] < end)
+                        .ToList();
+
+                    foreach (var b in blocks)
+                        ProcessTextChunk(CleanText(b.InnerText), currentCanon, CanonFromAnchorOrHeading, merge);
+                }
+            }
+        }
+
+        private static void ProcessTextChunk(
+            string text,
+            string defaultCanon,
+            Func<string, string> canonize,
+            Action<string, IEnumerable<string>> merge)
+        {
+            var raw = (text ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(raw)) return;
+
+            var lines = HtmlEntity.DeEntitize(raw)
+                .Replace("\r", "\n")
+                .Split('\n')
+                .Select(s => s.Trim())
+                .Where(s => !string.IsNullOrWhiteSpace(s));
+
+            string currentCanon = defaultCanon;
+
+            foreach (var line in lines)
+            {
+                var s = line;
+
+                // Dòng chỉ là anchor
+                var onlyAnchor = AnchorRegex.Match(s);
+                if (onlyAnchor.Success && onlyAnchor.Index == 0 && onlyAnchor.Length == s.Length)
+                {
+                    currentCanon = CanonFromMatch(onlyAnchor);
+                    continue;
+                }
+
+                // Nhiều anchor trong một dòng
+                var matches = AnchorRegex.Matches(s);
+                if (matches.Count == 0)
+                {
+                    merge(currentCanon, new[] { s });
+                    continue;
+                }
+
+                int cursor = 0;
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    var m = matches[i];
+
+                    // phần trước anchor -> nhóm hiện tại
+                    if (m.Index > cursor)
+                    {
+                        var left = s.Substring(cursor, m.Index - cursor).Trim();
+                        if (!string.IsNullOrWhiteSpace(left))
+                            merge(currentCanon, new[] { left });
+                    }
+
+                    // đổi nhóm
+                    currentCanon = CanonFromMatch(m);
+
+                    // bỏ dấu sau anchor ( :, ;, -, –, —, ., ", ”, », ), ] )
+                    int startContent = m.Index + m.Length;
+                    var after = s.Substring(startContent);
+                    after = Regex.Replace(after, @"^\s*[:;,\-–—\.\""“”'’»)\]]\s*", "");
+
+                    if (i + 1 < matches.Count)
+                    {
+                        var next = matches[i + 1];
+                        var seg = after.Substring(0, Math.Max(0, next.Index - startContent)).Trim();
+                        if (!string.IsNullOrWhiteSpace(seg))
+                            merge(currentCanon, new[] { seg });
+                        cursor = next.Index;
+                    }
+                    else
+                    {
+                        var tail = after.Trim();
+                        if (!string.IsNullOrWhiteSpace(tail))
+                            merge(currentCanon, new[] { tail });
+                        cursor = s.Length;
+                    }
+                }
+
+                if (cursor < s.Length)
+                {
+                    var rest = s.Substring(cursor).Trim();
+                    if (!string.IsNullOrWhiteSpace(rest))
+                        merge(currentCanon, new[] { rest });
+                }
+            }
+        }
+
+        private static string CanonFromAnchorOrHeading(string text)
+        {
+            var m = AnchorRegex.Match(text);
+            if (m.Success) return CanonFromMatch(m);
+
+            // fallback rộng
+            var x = ToAsciiLower(CleanText(text));
+            if (Regex.IsMatch(x, @"\b(khong|chua)\s*bao\s*gom\b|\bnot\s*include(?:d)?\b|\bexclude(?:d)?\b")) return "dich vu khong bao gom";
+            if (Regex.IsMatch(x, @"\b(bao\s*gom|gia\s*bao\s*gom|dich\s*vu\s*bao\s*gom)\b|(?<!not\s)include(?:d)?\b")) return "dich vu bao gom";
+            if (Regex.IsMatch(x, @"\b(chi\s*phi\s*tre\s*em|chinh\s*sach\s*tre\s*em|tre\s*em|em\s*be)\b")) return "chi phi tre em";
+            if (Regex.IsMatch(x, @"\b(ky|ki)\s*hop\s*dong\b|\bdat\s*coc\b|\bdat\s*coc\s*tour\b|\bthanh\s*toan\b|\bh[oô] sơ.*visa\b|\bvisa.*h[oô] sơ\b|\bl[ịi]ch\s*hẹn\b")) return "ky hop dong & dat coc tour";
+            if (Regex.IsMatch(x, @"\b(quy\s*din[h]?h\s*h[u]y\s*tour|dieu\s*kien\s*h[u]y|chinh\s*sach\s*h[u]y|h[u]y\s*tour|phi\s*h[u]y)\b")) return "quy dinh huy tour";
+            return string.Empty;
+        }
+
+        private static void ReclassifyMisplaced(Dictionary<string, HashSet<string>> bucket)
+        {
+            // Nếu trong bucket "CHI PHÍ TRẺ EM" có dòng chứa anchor khác -> cắt lại & phân phối
+            if (bucket.TryGetValue("chi phi tre em", out var childSet))
+            {
+                var original = childSet.ToList();
+                foreach (var line in original)
+                {
+                    if (AnchorRegex.IsMatch(line) && !Regex.IsMatch(ToAsciiLower(line), @"\btre\s*em\b"))
+                    {
+                        childSet.Remove(line);
+                        ProcessTextChunk(
+                            line,
+                            "chi phi tre em",
+                            CanonFromAnchorOrHeading,
+                            (canon, items) =>
+                            {
+                                if (!bucket.TryGetValue(canon, out var set))
+                                    bucket[canon] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                                foreach (var it in items)
+                                {
+                                    var t = CleanText(it);
+                                    if (!string.IsNullOrWhiteSpace(t)) set.Add(t);
+                                }
+                            });
+                    }
+                }
+            }
+
+            // Thêm lớp bảo hiểm: nếu dòng rơi nhầm nhóm, chuyển sang nhóm đúng
+            string ClassifyLine(string line)
+            {
+                var x = ToAsciiLower(CleanText(line));
+                if (Regex.IsMatch(x, @"\b(quy\s*din[h]?h\s*h[u]y\s*tour|dieu\s*kien\s*h[u]y|chinh\s*sach\s*h[u]y|h[u]y\s*tour|phi\s*h[u]y)\b"))
+                    return "quy dinh huy tour";
+                if (Regex.IsMatch(x, @"\b(ky|ki)\s*hop\s*dong\b|\bdat\s*coc\b|\bdat\s*coc\s*tour\b|\bthanh\s*toan\b|\bh[oô] sơ.*visa\b|\bvisa.*h[oô] sơ\b|\bl[ịi]ch\s*hẹn\b"))
+                    return "ky hop dong & dat coc tour";
+                return string.Empty;
+            }
+
+            var moves = new List<(string from, string to, string line)>();
+            foreach (var kv in bucket.ToList())
+            {
+                foreach (var line in kv.Value)
+                {
+                    var dest = ClassifyLine(line);
+                    if (!string.IsNullOrWhiteSpace(dest) &&
+                        !dest.Equals(kv.Key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        moves.Add((kv.Key, dest, line));
+                    }
+                }
+            }
+            foreach (var mv in moves)
+            {
+                if (!bucket.TryGetValue(mv.to, out var tset))
+                    bucket[mv.to] = tset = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bucket[mv.from].Remove(mv.line);
+                tset.Add(mv.line);
             }
         }
 
@@ -406,7 +533,7 @@ namespace TouristApp.Services
             return null;
         }
 
-        // ================== Helpers chung ==================
+        // ================== Helpers ==================
         private static string ToAsciiLower(string? s)
         {
             if (string.IsNullOrEmpty(s)) return "";
@@ -422,8 +549,8 @@ namespace TouristApp.Services
         {
             if (string.IsNullOrEmpty(s)) return "";
             var t = HtmlEntity.DeEntitize(s);
-            t = Regex.Replace(t, @"\s+", " "); // gộp khoảng trắng
-            t = t.Replace("\u00A0", " ");      // nbsp
+            t = Regex.Replace(t, @"\s+", " ");
+            t = t.Replace("\u00A0", " ");
             return t.Trim();
         }
     }
