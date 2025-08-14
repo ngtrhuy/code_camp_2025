@@ -5,34 +5,38 @@ using TouristApp.Services;
 namespace TouristApp.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
+    [Route("api/pystravel")]
     public class PystravelCrawlController : ControllerBase
     {
-        private readonly PystravelCrawlService _crawlService;
-
-        public PystravelCrawlController(PystravelCrawlService crawlService)
-        {
-            _crawlService = crawlService;
-        }
+        private readonly PystravelCrawlService _service = new PystravelCrawlService();
 
         /// <summary>
-        /// API chỉ crawl dữ liệu từ trang web (không insert DB)
+        /// Xem danh sách tour (mặc định kèm lịch trình chi tiết).
+        /// /api/pystravel/tours?includeDetails=true|false
         /// </summary>
         [HttpGet("tours")]
-        public async Task<ActionResult<List<StandardTourModel>>> GetTours()
+        public async Task<ActionResult<List<StandardTourModel>>> GetTours([FromQuery] bool includeDetails = true)
         {
-            var tours = await _crawlService.GetToursAsync();
+            var tours = await _service.CrawlListAsync(includeDetails);
             return Ok(tours);
         }
 
         /// <summary>
-        /// API vừa crawl vừa insert vào database
+        /// Crawl & import DB (tours + schedules).
+        /// /api/pystravel/import?includeDetails=true|false
         /// </summary>
-        [HttpPost("insert")]
-        public async Task<IActionResult> CrawlAndInsertTours()
+        [HttpPost("import")]
+        public async Task<ActionResult> Import([FromQuery] bool includeDetails = true)
         {
-            await _crawlService.GetToursAsync(insertToDb: true);
-            return Ok(new { message = "✅ Crawl & Insert thành công vào database." });
+            try
+            {
+                var inserted = await _service.ImportAsync(includeDetails);
+                return Ok(new { message = $"Đã import {inserted} tour từ Pystravel (kèm schedules={includeDetails})." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = $"Lỗi khi import dữ liệu: {ex.Message}" });
+            }
         }
     }
 }

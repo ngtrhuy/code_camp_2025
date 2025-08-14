@@ -1,211 +1,302 @@
-﻿ using HtmlAgilityPack;
-using MySql.Data.MySqlClient;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using HtmlAgilityPack;
 using MySqlConnector;
 using TouristApp.Models;
-using TouristApp.Services;
-using MySqlCommand = MySqlConnector.MySqlCommand;
-using MySqlConnection = MySqlConnector.MySqlConnection;
 
 namespace TouristApp.Services
 {
     public class PystravelCrawlService
     {
-        private readonly HttpClient _httpClient;
+        private const string ListUrl = "https://pystravel.vn/danh-muc-tour/508-tour-mua-thu-trong-nuoc.html";
+        private readonly string _connStr = "server=localhost;database=code_camp_2025;uid=root;pwd=;";
 
-        public PystravelCrawlService(HttpClient httpClient)
+        public async Task<List<StandardTourModel>> CrawlListAsync(bool includeDetails = true)
         {
-            _httpClient = httpClient;
-        }
+            var results = new List<StandardTourModel>();
+            using var http = CreateHttp();
 
-        /// <summary>
-        /// Crawl danh sách tour từ trang chủ pystravel
-        /// </summary>
-        public async Task<List<StandardTourModel>> GetToursAsync()
-        {
-            var tours = new List<StandardTourModel>();
-            var html = await _httpClient.GetStringAsync("https://pystravel.vn/");
+            var html = await http.GetStringAsync(ListUrl);
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
 
-            var tourNodes = doc.DocumentNode.SelectNodes("//div[contains(@class, 'drop-shadow-md')]");
-            if (tourNodes == null) return tours;
+            // Mỗi thẻ card
+            var itemNodes = doc.DocumentNode.SelectNodes("//div[contains(@class,'grid') and contains(@class,'shadow') and .//h2]");
+            if (itemNodes == null || itemNodes.Count == 0) return results;
 
-            foreach (var node in tourNodes)
+            foreach (var node in itemNodes)
             {
                 try
                 {
+                    // Ảnh
+                    var img = node.SelectSingleNode(".//img");
+                    var imgSrc = img?.GetAttributeValue("src", "")?.Trim() ?? "";
+                    var imageUrl = string.IsNullOrWhiteSpace(imgSrc)
+                        ? ""
+                        : (imgSrc.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? imgSrc : $"https://pystravel.vn{imgSrc}");
+
+                    // Tiêu đề
+                    var title = HtmlEntity.DeEntitize(node.SelectSingleNode(".//h2")?.InnerText?.Trim() ?? "");
+
+                    // Giá
+                    var priceNode = node.SelectSingleNode(".//div[contains(@class,'text-xl') and contains(@class,'font-bold') and contains(@class,'text-tertiary')]");
+                    var price = HtmlEntity.DeEntitize(priceNode?.InnerText?.Trim() ?? "");
+
+                    // 3 dòng info
+                    var liNodes = node.SelectNodes(".//div[contains(@class,'flex') and contains(@class,'gap-2')]//ul/li");
+                    string departureLocation = "", duration = "";
+                    var departureDates = new List<string>();
+
+                    if (liNodes != null && liNodes.Count >= 3)
+                    {
+                        departureLocation = CleanColonText(liNodes[0].InnerText);  // Điểm khởi hành
+                        duration = CleanColonText(liNodes[1].InnerText);           // Thời gian
+                        var rawDepart = HtmlEntity.DeEntitize(liNodes[2].InnerText ?? "");
+                        departureDates = ParseDepartureDates(rawDepart);           // Khởi hành: Tháng xx: ...
+                    }
+
+                    // Link chi tiết
+                    var detailLink = node.SelectSingleNode(".//a[contains(@class,'main-link')]")
+                                   ?? node.SelectSingleNode(".//h2/ancestor-or-self::a[1]")
+                                   ?? node.SelectSingleNode(".//button/ancestor::a[1]");
+                    var detailUrl = detailLink?.GetAttributeValue("href", "")?.Trim() ?? "";
+                    if (!string.IsNullOrEmpty(detailUrl) && !detailUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                        detailUrl = $"https://pystravel.vn{detailUrl}";
+
+                    // Ưu đãi
+                    var promoLis = node.SelectNodes(".//ul[contains(@class,'list-disc')]/li");
+                    var promos = promoLis?.Select(li => HtmlEntity.DeEntitize(li.InnerText.Trim()))
+                                         .Where(s => !string.IsNullOrWhiteSpace(s)).ToList()
+                                 ?? new List<string>();
+
                     var tour = new StandardTourModel
                     {
-                        TourName = node.SelectSingleNode(".//h3")?.InnerText?.Trim() ?? "",
-                        ImageUrl = node.SelectSingleNode(".//img[contains(@class,'object-cover')]")?.GetAttributeValue("src", "") ?? "",
-                        TourDetailUrl = node.SelectSingleNode(".//a")?.GetAttributeValue("href", "") ?? "",
-                        Price = node.SelectSingleNode(".//div[contains(@class,'text-xl') and contains(@class,'font-bold')]")?.InnerText?.Trim() ?? "",
-                        Duration = node.SelectSingleNode(".//div[contains(@class,'flex-1')]//span[contains(@class,'uppercase')]")?.InnerText?.Trim() ?? "",
-                        DepartureLocation = node.SelectSingleNode(".//span[contains(text(),'Điểm đi:')]")?.InnerText?.Replace("Điểm đi:", "").Trim() ?? ""
+                        TourName = title,
+                        TourCode = "",
+                        Price = price,
+                        ImageUrl = imageUrl,
+                        DepartureLocation = departureLocation,
+                        Duration = duration,
+                        TourDetailUrl = detailUrl,
+                        DepartureDates = departureDates
                     };
 
-                    // Chuẩn hóa đường dẫn
-                    if (!string.IsNullOrEmpty(tour.ImageUrl) && !tour.ImageUrl.StartsWith("http"))
-                        tour.ImageUrl = "https://pystravel.vn" + tour.ImageUrl;
+                    if (promos.Count > 0)
+                        tour.ImportantNotes["Ưu đãi"] = string.Join("\n", promos);
 
-                    if (!string.IsNullOrEmpty(tour.TourDetailUrl) && !tour.TourDetailUrl.StartsWith("http"))
-                        tour.TourDetailUrl = "https://pystravel.vn" + tour.TourDetailUrl;
+                    // ⭐ Crawl trang chi tiết để lấy lịch trình
+                    if (includeDetails && !string.IsNullOrWhiteSpace(detailUrl))
+                    {
+                        await CrawlTourDetailAsync(detailUrl, tour);
+                    }
 
-                    // Crawl chi tiết lịch trình, ngày khởi hành, ghi chú
-                    await CrawlTourDetailAsync(tour);
-
-                    tours.Add(tour);
+                    results.Add(tour);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"❌ Lỗi tour: {ex.Message}");
+                    Console.WriteLine($"[Pystravel] Lỗi parse card: {ex.Message}");
                 }
             }
 
-            return tours;
+            return results;
         }
 
         /// <summary>
-        /// Gọi từ Controller để crawl + insert DB
+        /// Crawl chi tiết: các block "NGÀY 01/02/..." + nội dung
         /// </summary>
-        public async Task GetToursAsync(bool insertToDb)
-        {
-            var tours = await GetToursAsync();
-            if (insertToDb && tours.Count > 0)
-            {
-                await InsertToursToDatabase(tours);
-            }
-        }
-
-        private async Task CrawlTourDetailAsync(StandardTourModel tour)
+        public async Task CrawlTourDetailAsync(string detailUrl, StandardTourModel tour)
         {
             try
             {
-                var html = await _httpClient.GetStringAsync(tour.TourDetailUrl);
-                var doc = new HtmlDocument();
-                doc.LoadHtml(html);
+                using var http = CreateHttp();
+                var html = await http.GetStringAsync(detailUrl);
+                var doc = new HtmlDocument(); doc.LoadHtml(html);
 
-                // 📅 Ngày khởi hành
-                var rows = doc.DocumentNode.SelectNodes("//tbody//tr");
-                if (rows != null && rows.Count > 1)
+                // Mỗi block ngày
+                var dayBlocks = doc.DocumentNode.SelectNodes("//div[contains(@class,'border-dashed') and contains(@class,'border-l')]");
+                if (dayBlocks == null || dayBlocks.Count == 0) return;
+
+                int idx = 1;
+                foreach (var block in dayBlocks)
                 {
-                    for (int i = 1; i < rows.Count; i++)
+                    // H3
+                    var dayTitleRaw = block.SelectSingleNode(".//h3")?.InnerText ?? "";
+                    var dayTitle = NormalizeSpaces(HtmlEntity.DeEntitize(dayTitleRaw));
+
+                    // Nội dung: vùng chứa description
+                    var contentNode = block.SelectSingleNode(".//div[contains(@class,'tour-detail_tour-content')]")
+                                       ?? block.SelectSingleNode(".//div[contains(@class,'collapsible_inner')]");
+                    var dayContent = contentNode == null ? "" : HtmlToMultilineText(contentNode);
+
+                    if (!string.IsNullOrWhiteSpace(dayTitle) || !string.IsNullOrWhiteSpace(dayContent))
                     {
-                        var cells = rows[i].SelectNodes(".//td");
-                        if (cells != null && cells.Count >= 1)
+                        tour.Schedule.Add(new TourScheduleItem
                         {
-                            var date = HtmlEntity.DeEntitize(cells[0].InnerText.Trim());
-                            if (!string.IsNullOrEmpty(date))
-                                tour.DepartureDates.Add(date);
-                        }
-                    }
-                }
-
-                // 📘 Lịch trình
-                var scheduleBlocks = doc.DocumentNode.SelectNodes("//div[@id='plan']//div[contains(@class,'border-primary-v2')]");
-                if (scheduleBlocks != null)
-                {
-                    foreach (var block in scheduleBlocks)
-                    {
-                        var title = HtmlEntity.DeEntitize(block.SelectSingleNode(".//h3")?.InnerText?.Trim() ?? "");
-                        var content = HtmlEntity.DeEntitize(block.SelectSingleNode(".//div[contains(@class,'tour-detail_tour-content')]")?.InnerText?.Trim() ?? "");
-
-                        if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(content))
-                        {
-                            tour.Schedule.Add(new TourScheduleItem
-                            {
-                                DayTitle = title,
-                                DayContent = content
-                            });
-                        }
-                    }
-                }
-
-                // 📌 Điều khoản
-                var noteBlocks = doc.DocumentNode.SelectNodes("//div[@id='includes']//div[contains(@class,'border') and contains(@class,'p-6')]");
-                if (noteBlocks != null)
-                {
-                    foreach (var section in noteBlocks)
-                    {
-                        var title = HtmlEntity.DeEntitize(section.SelectSingleNode(".//h3")?.InnerText?.Trim() ?? "");
-                        var items = section.SelectNodes(".//ul/li")?.Select(li => "• " + HtmlEntity.DeEntitize(li.InnerText.Trim())).ToList();
-
-                        if (!string.IsNullOrEmpty(title) && items != null && items.Any())
-                        {
-                            tour.ImportantNotes[title] = string.Join("\n", items);
-                        }
+                            Id = idx++,
+                            DayTitle = dayTitle,
+                            DayContent = dayContent
+                        });
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Lỗi crawl chi tiết: {ex.Message}");
+                Console.WriteLine($"[Pystravel] Lỗi crawl detail {detailUrl}: {ex.Message}");
             }
         }
 
-        private async Task InsertToursToDatabase(List<StandardTourModel> tours)
+        /// <summary>Ghi DB: tours + schedules. Bỏ qua tour trùng (tour_name, price, duration)</summary>
+        public async Task<int> ImportAsync(bool includeDetails = true)
         {
-            string connStr = "server=localhost;database=code_camp_2025;uid=root;pwd=;charset=utf8mb4;";
+            var tours = await CrawlListAsync(includeDetails);
 
-
-            using var conn = new MySqlConnection(connStr);
+            using var conn = new MySqlConnection(_connStr);
             await conn.OpenAsync();
 
-            foreach (var tour in tours)
+            int inserted = 0;
+            foreach (var t in tours)
             {
                 try
                 {
-                    // INSERT vào bảng tours
-                    var cmd = new MySqlCommand(@"
-                        INSERT INTO tours (
+                    // Check trùng
+                    var checkCmd = new MySqlCommand(@"
+                        SELECT id FROM tours
+                        WHERE tour_name=@name AND price=@price AND duration=@dur
+                        LIMIT 1", conn);
+                    checkCmd.Parameters.AddWithValue("@name", t.TourName);
+                    checkCmd.Parameters.AddWithValue("@price", t.Price);
+                    checkCmd.Parameters.AddWithValue("@dur", t.Duration);
+
+                    var existIdObj = await checkCmd.ExecuteScalarAsync();
+                    if (existIdObj != null && existIdObj != DBNull.Value)
+                    {
+                        Console.WriteLine($"⏩ Bỏ qua tour trùng: {t.TourName}");
+                        continue;
+                    }
+
+                    // Insert tour
+                    var ins = new MySqlCommand(@"
+                        INSERT INTO tours(
                             tour_name, tour_code, price, image_url,
                             departure_location, duration, tour_detail_url,
                             departure_dates, important_notes
-                        )
-                        VALUES (
-                            @name, @code, @price, @img,
-                            @location, @duration, @url,
-                            @dates, @notes
+                        ) VALUES(
+                            @name,@code,@price,@img,
+                            @loc,@dur,@url,
+                            @dates,@notes
                         );
-                        SELECT LAST_INSERT_ID();
-                    ", conn);
+                        SELECT LAST_INSERT_ID();", conn);
 
-                    cmd.Parameters.AddWithValue("@name", tour.TourName);
-                    cmd.Parameters.AddWithValue("@code", tour.TourCode);
-                    cmd.Parameters.AddWithValue("@price", tour.Price);
-                    cmd.Parameters.AddWithValue("@img", tour.ImageUrl);
-                    cmd.Parameters.AddWithValue("@location", tour.DepartureLocation);
-                    cmd.Parameters.AddWithValue("@duration", tour.Duration);
-                    cmd.Parameters.AddWithValue("@url", tour.TourDetailUrl);
-                    cmd.Parameters.AddWithValue("@dates", string.Join(", ", tour.DepartureDates));
-                    cmd.Parameters.AddWithValue("@notes", string.Join("\n\n", tour.ImportantNotes.Select(kv => $"{kv.Key}:\n{kv.Value}")));
+                    ins.Parameters.AddWithValue("@name", t.TourName);
+                    ins.Parameters.AddWithValue("@code", t.TourCode);
+                    ins.Parameters.AddWithValue("@price", t.Price);
+                    ins.Parameters.AddWithValue("@img", t.ImageUrl);
+                    ins.Parameters.AddWithValue("@loc", t.DepartureLocation);
+                    ins.Parameters.AddWithValue("@dur", t.Duration);
+                    ins.Parameters.AddWithValue("@url", t.TourDetailUrl);
+                    ins.Parameters.AddWithValue("@dates", string.Join(", ", t.DepartureDates ?? new List<string>()));
+                    ins.Parameters.AddWithValue("@notes", string.Join("\n\n", t.ImportantNotes.Select(kv => $"{kv.Key}:\n{kv.Value}")));
 
-                    int tourId = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+                    int tourId = Convert.ToInt32(await ins.ExecuteScalarAsync());
+                    inserted++;
 
-                    // INSERT lịch trình vào bảng schedules
-                    foreach (var item in tour.Schedule)
+                    // Insert schedules (nếu có)
+                    if (t.Schedule != null && t.Schedule.Count > 0)
                     {
-                        var scheduleCmd = new MySqlCommand(@"
-                            INSERT INTO schedules (tour_id, day_title, day_content)
-                            VALUES (@tourId, @title, @content);
-                        ", conn);
-
-                        scheduleCmd.Parameters.AddWithValue("@tourId", tourId);
-                        scheduleCmd.Parameters.AddWithValue("@title", item.DayTitle);
-                        scheduleCmd.Parameters.AddWithValue("@content", item.DayContent);
-
-                        await scheduleCmd.ExecuteNonQueryAsync();
+                        foreach (var s in t.Schedule)
+                        {
+                            var insSch = new MySqlCommand(@"
+                                INSERT INTO schedules(tour_id, day_title, day_content)
+                                VALUES(@tourId, @title, @content)", conn);
+                            insSch.Parameters.AddWithValue("@tourId", tourId);
+                            insSch.Parameters.AddWithValue("@title", s.DayTitle ?? "");
+                            insSch.Parameters.AddWithValue("@content", s.DayContent ?? "");
+                            await insSch.ExecuteNonQueryAsync();
+                        }
                     }
-
-                    Console.WriteLine($"✅ Insert thành công: {tour.TourName}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"❌ Lỗi insert DB: {ex.Message}");
+                    Console.WriteLine($"❌ Lỗi insert: {ex.Message}");
                 }
             }
 
             await conn.CloseAsync();
+            return inserted;
+        }
+
+        // ================= Helpers =================
+
+        private static HttpClient CreateHttp()
+        {
+            var h = new HttpClient();
+            h.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; TourCrawler/1.0)");
+            return h;
+        }
+
+        // "Khởi hành: Tháng 08: 14; Tháng 09: 11, 18, 25; ..."
+        private static List<string> ParseDepartureDates(string raw)
+        {
+            var res = new List<string>();
+            if (string.IsNullOrWhiteSpace(raw)) return res;
+
+            var matches = Regex.Matches(raw, @"Tháng\s*(\d{1,2})\s*:\s*([^;]+)");
+            foreach (Match m in matches)
+            {
+                var mm = m.Groups[1].Value.PadLeft(2, '0');
+                var days = Regex.Matches(m.Groups[2].Value, @"\d{1,2}")
+                                .Cast<Match>()
+                                .Select(x => x.Value.PadLeft(2, '0'));
+                res.AddRange(days.Select(d => $"{mm}-{d}"));
+            }
+            return res.Distinct().ToList();
+        }
+
+        private static string CleanColonText(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return "";
+            var s = HtmlEntity.DeEntitize(input).Trim();
+            var i = s.IndexOf(':');
+            return (i >= 0 && i + 1 < s.Length) ? s[(i + 1)..].Trim() : s;
+        }
+
+        private static string NormalizeSpaces(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            s = s.Replace("&nbsp;", " ");
+            s = HtmlEntity.DeEntitize(s);
+            return Regex.Replace(s, @"\s+", " ").Trim();
+        }
+
+        /// <summary>Chuyển HTML -> text, giữ xuống dòng cho p/br/li.</summary>
+        private static string HtmlToMultilineText(HtmlNode node)
+        {
+            // Clone để thao tác
+            var temp = HtmlNode.CreateNode(node.OuterHtml);
+
+            foreach (var br in temp.SelectNodes(".//br") ?? Enumerable.Empty<HtmlNode>())
+                br.ParentNode.ReplaceChild(HtmlTextNode.CreateNode("\n"), br);
+
+            foreach (var p in temp.SelectNodes(".//p") ?? Enumerable.Empty<HtmlNode>())
+                p.InnerHtml = (p.InnerHtml?.Trim() ?? "") + "\n";
+
+            foreach (var li in temp.SelectNodes(".//li") ?? Enumerable.Empty<HtmlNode>())
+            {
+                var text = HtmlEntity.DeEntitize(li.InnerText.Trim());
+                li.ParentNode.ReplaceChild(HtmlTextNode.CreateNode("- " + text + "\n"), li);
+            }
+
+            foreach (var bad in temp.SelectNodes(".//img|.//script|.//style") ?? Enumerable.Empty<HtmlNode>())
+                bad.Remove();
+
+            var txt = HtmlEntity.DeEntitize(temp.InnerText ?? "");
+            txt = Regex.Replace(txt, @"[ \t]+\n", "\n");
+            txt = Regex.Replace(txt, @"\n{3,}", "\n\n");
+            return txt.Trim();
         }
     }
 }
