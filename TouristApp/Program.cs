@@ -16,6 +16,10 @@ namespace TouristApp
             builder.Services.AddSwaggerGen();
 
             // CORS (mở hoàn toàn cho tiện test API)
+            builder.Services.AddHttpClient<DeVietTourCrawler>();
+            builder.Services.AddHttpClient<PystravelCrawlService>();
+            builder.Services.AddHttpClient<LuaVietTourCrawler>();
+            builder.Services.AddScoped<IHistoryRepository, HistoryRepository>();
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowAll", policy =>
