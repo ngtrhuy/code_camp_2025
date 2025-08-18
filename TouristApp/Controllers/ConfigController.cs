@@ -46,27 +46,29 @@ namespace TouristApp.Controllers
                         {
                             configs.Add(new
                             {
-                                Id = reader["id"],
-                                BaseDomain = reader["base_domain"],
-                                BaseUrl = reader["base_url"],
-                                TourListSelector = reader["tour_list_selector"],
-                                TourName = reader["tour_name"],
-                                TourCode = reader["tour_code"],
-                                TourPrice = reader["tour_price"],
-                                ImageUrl = reader["image_url"],
-                                DepartureLocation = reader["departure_location"],
-                                DepartureDate = reader["departure_date"],
-                                TourDuration = reader["tour_duration"],
-                                TourDetailUrl = reader["tour_detail_url"],
-                                TourDetailDayTitle = reader["tour_detail_day_title"],
-                                TourDetailDayContent = reader["tour_detail_day_content"],
-                                TourDetailNote = reader["tour_detail_note"],
-                                CrawlType = reader["crawl_type"],
-                                LoadMoreButtonSelector = reader["load_more_button_selector"],
-                                LoadMoreType = reader["load_more_type"],
-                                LoadMoreButtonIndex = reader["load_more_button_index"],
-                                PagingType = reader["paging_type"]
-                            });
+                                Id = Convert.ToInt32(reader["id"]),
+                                BaseDomain = reader["base_domain"].ToString(),
+                                BaseUrl = reader["base_url"].ToString(),
+                                TourName = reader["tour_name"].ToString(),
+                                TourCode = reader["tour_code"].ToString(),
+                                TourPrice = reader["tour_price"].ToString(),
+                                ImageUrl = reader["image_url"].ToString(),
+                                DepartureLocation = reader["departure_location"].ToString(),
+                                DepartureDate = reader["departure_date"].ToString(),
+                                TourDuration = reader["tour_duration"].ToString(),
+                                TourDetailUrl = reader["tour_detail_url"].ToString(),
+                                TourDetailDayTitle = reader["tour_detail_day_title"].ToString(),
+                                TourDetailDayContent = reader["tour_detail_day_content"].ToString(),
+                                TourDetailNote = reader["tour_detail_note"].ToString(),
+                                CrawlType = reader["crawl_type"].ToString(),
+                                TourListSelector = reader["tour_list_selector"].ToString(),
+                                ImageAttr = reader["image_attr"].ToString(),
+                                TourDetailAttr = reader["tour_detail_attr"].ToString(),
+                                LoadMoreButtonSelector = reader["load_more_button_selector"].ToString(),
+                                LoadMoreType = reader["load_more_type"].ToString(),
+                                PagingType = reader["paging_type"].ToString()
+                           
+                        });
                         }
                     }
                 }
@@ -83,17 +85,18 @@ namespace TouristApp.Controllers
             connection.Open();
 
             var query = @"
-                INSERT INTO page_config (
-                    base_domain, base_url, tour_list_selector, tour_name, tour_code, tour_price, image_url, 
-                    departure_location, departure_date, tour_duration, tour_detail_url, 
-                    tour_detail_day_title, tour_detail_day_content, tour_detail_note, crawl_type,
-                    load_more_button_selector, load_more_type, paging_type
-                ) VALUES (
-                    @BaseDomain, @BaseUrl, @TourListSelector, @TourName, @TourCode, @TourPrice, @ImageUrl, 
-                    @DepartureLocation, @DepartureDate, @TourDuration, @TourDetailUrl, 
-                    @TourDetailDayTitle, @TourDetailDayContent, @TourDetailNote, @CrawlType,
-                    @LoadMoreButtonSelector, @LoadMoreType, @PagingType
-                );";
+               INSERT INTO page_config (
+    base_domain, base_url, tour_list_selector, tour_name, tour_code, tour_price, image_url,
+    departure_location, departure_date, tour_duration, tour_detail_url,
+    tour_detail_day_title, tour_detail_day_content, tour_detail_note, crawl_type,
+    image_attr, tour_detail_attr, load_more_button_selector, load_more_type, paging_type
+)
+VALUES (
+    @BaseDomain, @BaseUrl, @TourListSelector, @TourName, @TourCode, @TourPrice, @ImageUrl,
+    @DepartureLocation, @DepartureDate, @TourDuration, @TourDetailUrl,
+    @TourDetailDayTitle, @TourDetailDayContent, @TourDetailNote, @CrawlType,
+    @ImageAttr, @TourDetailAttr, @LoadMoreButtonSelector, @LoadMoreType, @PagingType
+);";
 
             using var command = new MySqlCommand(query, connection);
 
@@ -112,6 +115,8 @@ namespace TouristApp.Controllers
             command.Parameters.AddWithValue("@TourDetailDayContent", config.TourDetailDayContent);
             command.Parameters.AddWithValue("@TourDetailNote", config.TourDetailNote);
             command.Parameters.AddWithValue("@CrawlType", config.CrawlType);
+            command.Parameters.AddWithValue("@ImageAttr", config.ImageAttr);
+            command.Parameters.AddWithValue("@TourDetailAttr", config.TourDetailAttr);
             command.Parameters.AddWithValue("@LoadMoreButtonSelector", config.LoadMoreButtonSelector);
             command.Parameters.AddWithValue("@LoadMoreType", config.LoadMoreType);
             command.Parameters.AddWithValue("@PagingType", config.PagingType);
@@ -129,26 +134,29 @@ namespace TouristApp.Controllers
             connection.Open();
 
             var query = @"
-                UPDATE page_config SET 
-                    base_domain = @BaseDomain,
-                    base_url = @BaseUrl,
-                    tour_list_selector = @TourListSelector,
-                    tour_name = @TourName,
-                    tour_code = @TourCode,
-                    tour_price = @TourPrice,
-                    image_url = @ImageUrl,
-                    departure_location = @DepartureLocation,
-                    departure_date = @DepartureDate,
-                    tour_duration = @TourDuration,
-                    tour_detail_url = @TourDetailUrl,
-                    tour_detail_day_title = @TourDetailDayTitle,
-                    tour_detail_day_content = @TourDetailDayContent,
-                    tour_detail_note = @TourDetailNote,
-                    crawl_type = @CrawlType,
-                    load_more_button_selector = @LoadMoreButtonSelector,
-                    load_more_type = @LoadMoreType,
-                    paging_type = @PagingType
-                WHERE id = @Id";
+               UPDATE page_config SET
+    base_domain = @BaseDomain,
+    base_url = @BaseUrl,
+    tour_list_selector = @TourListSelector,
+    tour_name = @TourName,
+    tour_code = @TourCode,
+    tour_price = @TourPrice,
+    image_url = @ImageUrl,
+    departure_location = @DepartureLocation,
+    departure_date = @DepartureDate,
+    tour_duration = @TourDuration,
+    tour_detail_url = @TourDetailUrl,
+    tour_detail_day_title = @TourDetailDayTitle,
+    tour_detail_day_content = @TourDetailDayContent,
+    tour_detail_note = @TourDetailNote,
+    crawl_type = @CrawlType,
+    image_attr = @ImageAttr,
+    tour_detail_attr = @TourDetailAttr,
+    load_more_button_selector = @LoadMoreButtonSelector,
+    load_more_type = @LoadMoreType,
+    paging_type = @PagingType
+WHERE id = @Id;
+";
 
             using var command = new MySqlCommand(query, connection);
 
