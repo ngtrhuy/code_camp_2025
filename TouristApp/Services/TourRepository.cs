@@ -81,5 +81,19 @@ namespace TouristApp.Services
 
             return savedCount;
         }
+
+
+        public bool IsTourExists(string? code, string? url)
+        {
+            using var conn = new MySqlConnection(_connectionString);
+            conn.Open();
+            var cmd = new MySqlCommand(
+                @"SELECT COUNT(*) FROM tours WHERE tour_detail_url = @tourDetailUrl", conn);
+            cmd.Parameters.AddWithValue("@tourDetailUrl", url ?? "");
+            return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+        }
+
+
+
     }
 }

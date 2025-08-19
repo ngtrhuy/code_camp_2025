@@ -63,8 +63,9 @@ namespace TouristApp.Controllers
                                 TourDetailNote = reader["tour_detail_note"],
                                 CrawlType = reader["crawl_type"],
                                 LoadMoreButtonSelector = reader["load_more_button_selector"],
+
                                 LoadMoreType = reader["load_more_type"],
-                                LoadMoreButtonIndex = reader["load_more_button_index"],
+                                /*LoadMoreButtonIndex = reader["load_more_button_index"],*/
                                 PagingType = reader["paging_type"]
                             });
                         }

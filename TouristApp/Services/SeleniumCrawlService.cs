@@ -3,15 +3,23 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using System.Net;
 using System.Text.RegularExpressions;
-using System.Xml.XPath;
 using TouristApp.Models;
 
 namespace TouristApp.Services
 {
     public class SeleniumCrawlService
     {
-        public List<StandardTourModel> CrawlToursWithSelenium(PageConfigModel config)
+        private readonly TourRepository _tourRepository;
+
+        public SeleniumCrawlService(TourRepository tourRepository)
         {
+            _tourRepository = tourRepository;
+        }
+
+        public List<StandardTourModel> CrawlToursWithSelenium(PageConfigModel config, int maxTours)
+        {
+            if (maxTours <= 0) maxTours = int.MaxValue;
+
             var options = new ChromeOptions();
             options.AddArgument("--headless");
             options.AddArgument("--disable-gpu");
@@ -20,36 +28,19 @@ namespace TouristApp.Services
             using var driver = new ChromeDriver(options);
             driver.Navigate().GoToUrl(config.BaseUrl);
 
+            // Load more: Bỏ break khi đủ maxTours!
             if (config.PagingType == "load_more")
             {
                 while (true)
                 {
                     try
                     {
-                        var currentHtml = driver.PageSource;
                         var currentDoc = new HtmlDocument();
-                        currentDoc.LoadHtml(currentHtml);
+                        currentDoc.LoadHtml(driver.PageSource);
+                        var currentNodes = currentDoc.DocumentNode.SelectNodes(config.TourListSelector);
+                        int currentCount = currentNodes?.Count ?? 0;
 
-                        HtmlNodeCollection? currentNodes = null;
-                        try
-                        {
-                            Console.WriteLine("👉 XPath đang dùng: " + config.TourListSelector);
-                            currentNodes = currentDoc.DocumentNode.SelectNodes(config.TourListSelector);
-                        }
-                        catch (XPathException ex)
-                        {
-                            Console.WriteLine($"❌ XPath lỗi khi load more: {ex.Message}");
-                            break;
-                        }
-
-                        int currentItemCount = currentNodes?.Count ?? 0;
-
-                        if (currentItemCount >= 20)
-                        {
-                            Console.WriteLine("✅ Đã đủ 20 tour, dừng load thêm.");
-                            break;
-                        }
-
+                        // KHÔNG break khi đủ maxTours
                         IWebElement? loadMoreButton = null;
                         if (!string.IsNullOrEmpty(config.LoadMoreButtonSelector))
                         {
@@ -61,95 +52,110 @@ namespace TouristApp.Services
                                 loadMoreButton = driver.FindElements(By.XPath(config.LoadMoreButtonSelector)).FirstOrDefault();
                         }
 
-                        if (loadMoreButton == null)
-                        {
-                            Console.WriteLine("🛑 Không tìm thấy nút Load More.");
-                            break;
-                        }
+                        if (loadMoreButton == null) break;
 
-                        IJavaScriptExecutor js = (IJavaScriptExecutor)driver;
+                        var js = (IJavaScriptExecutor)driver;
+                        js.ExecuteScript("arguments[0].scrollIntoView({block:'center'});", loadMoreButton);
                         js.ExecuteScript("arguments[0].click();", loadMoreButton);
-                        Thread.Sleep(7000);
+                        Thread.Sleep(6000);
 
-                        var newHtml = driver.PageSource;
                         var newDoc = new HtmlDocument();
-                        newDoc.LoadHtml(newHtml);
-
-                        HtmlNodeCollection? newNodes = null;
-                        try
-                        {
-                            newNodes = newDoc.DocumentNode.SelectNodes(config.TourListSelector);
-                        }
-                        catch (XPathException ex)
-                        {
-                            Console.WriteLine($"❌ XPath lỗi sau khi load more: {ex.Message}");
-                            break;
-                        }
-
-                        int newItemCount = newNodes?.Count ?? 0;
-
-                        if (newItemCount <= currentItemCount)
-                        {
-                            Console.WriteLine("⚠️ Không có thêm dữ liệu sau khi click.");
-                            break;
-                        }
+                        newDoc.LoadHtml(driver.PageSource);
+                        var newCount = newDoc.DocumentNode.SelectNodes(config.TourListSelector)?.Count ?? 0;
+                        if (newCount <= currentCount) break; // Không load thêm được tour mới thì dừng
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"❌ Lỗi khi click Load More (JS): {ex.Message}");
-                        break;
-                    }
+                    catch { break; }
                 }
             }
 
-            var html = driver.PageSource;
             var doc = new HtmlDocument();
-            doc.LoadHtml(html);
-
+            doc.LoadHtml(driver.PageSource);
             var tours = new List<StandardTourModel>();
-            HtmlNodeCollection? nodes = null;
+            var nodes = doc.DocumentNode.SelectNodes(config.TourListSelector);
 
-            try
-            {
-                nodes = doc.DocumentNode.SelectNodes(config.TourListSelector);
-            }
-            catch (XPathException ex)
-            {
-                Console.WriteLine($"❌ XPath selector lỗi: {ex.Message}");
-                return tours;
-            }
-
+            // Debug selector
+            Console.WriteLine("========== DEBUG: Tổng số node tour lấy được: " + (nodes?.Count ?? 0) + " ==========");
             if (nodes == null)
             {
-                Console.WriteLine("⚠️ Không tìm thấy tour nào.");
+                Console.WriteLine("========== DEBUG: Không lấy được node tour nào. Kiểm tra lại selector hoặc trang web. ==========");
                 return tours;
             }
+
+            // Khởi tạo HashSet chống trùng local
+            var codeSet = new HashSet<string>();
+            var urlSet = new HashSet<string>();
+            // nameSet không cần thiết với đa số trang (có thể bỏ nếu muốn)
 
             foreach (var node in nodes)
             {
-                if (tours.Count >= 20) break;
                 try
                 {
+                    var tempDeparture = CleanText(GetTextByXPath(node, config.DepartureLocation));
+                    var tempDuration = CleanText(GetTextByXPath(node, config.TourDuration));
+
                     var tour = new StandardTourModel
                     {
                         TourName = CleanText(GetTextByXPath(node, config.TourName)),
-                        TourCode = CleanText(GetTextOrAttr(node, config.TourCode)),
+                        TourCode = config.TourCode == "NULL" ? "" : CleanText(GetTextOrAttr(node, config.TourCode)),
                         Price = CleanText(GetTextByXPath(node, config.TourPrice)),
                         ImageUrl = GetAttrByXPath(node, config.ImageUrl, config.ImageAttr),
-                        TourDetailUrl = GetAttrByXPath(node, config.TourDetailUrl, config.TourDetailAttr)
+                        TourDetailUrl = GetAttrByXPath(node, config.TourDetailUrl, config.TourDetailAttr),
+                        DepartureLocation = tempDeparture,
+                        Duration = tempDuration
                     };
 
-                    if (!string.IsNullOrEmpty(tour.TourDetailUrl) && !tour.TourDetailUrl.StartsWith("http"))
-                    {
-                        tour.TourDetailUrl = config.BaseDomain.TrimEnd('/') + "/" + tour.TourDetailUrl.TrimStart('/');
-                    }
+                    // Không lưu nếu cả 3 trường đều rỗng (chống bản ghi rác)
+                    if (string.IsNullOrWhiteSpace(tour.TourName)
+                        && string.IsNullOrWhiteSpace(tour.TourCode)
+                        && string.IsNullOrWhiteSpace(tour.TourDetailUrl))
+                        continue;
 
+                    if (!string.IsNullOrEmpty(tour.TourDetailUrl) && !tour.TourDetailUrl.StartsWith("http"))
+                        tour.TourDetailUrl = config.BaseDomain.TrimEnd('/') + "/" + tour.TourDetailUrl.TrimStart('/');
+
+                    var codeKey = tour.TourCode?.Trim() ?? "";
+                    var urlKey = tour.TourDetailUrl?.Trim() ?? "";
+
+                    // Bỏ qua nếu tour đã tồn tại trong DB (chỉ kiểm tra bảng Tour)
+                    if (_tourRepository.IsTourExists(codeKey, urlKey))
+                        continue;
+
+                    // Chống trùng local trong cùng một lần crawl
+                    if (!string.IsNullOrWhiteSpace(codeKey) && codeSet.Contains(codeKey)) continue;
+                    if (!string.IsNullOrWhiteSpace(urlKey) && urlSet.Contains(urlKey)) continue;
+
+                    if (!string.IsNullOrWhiteSpace(codeKey)) codeSet.Add(codeKey);
+                    if (!string.IsNullOrWhiteSpace(urlKey)) urlSet.Add(urlKey);
+
+                    // Crawl detail nếu có url (giữ logic cũ)
                     if (!string.IsNullOrEmpty(tour.TourDetailUrl))
                     {
                         try
                         {
-                            var detailHtml = new HtmlWeb().Load(tour.TourDetailUrl);
+                            ((IJavaScriptExecutor)driver).ExecuteScript("window.open();");
+                            var tabs = driver.WindowHandles;
+                            driver.SwitchTo().Window(tabs.Last());
+                            driver.Navigate().GoToUrl(tour.TourDetailUrl);
+                            Thread.Sleep(2000);
 
+                            var detailSource = driver.PageSource;
+                            var detailHtml = new HtmlDocument();
+                            detailHtml.LoadHtml(detailSource);
+
+                            if (string.IsNullOrWhiteSpace(tour.TourCode) && config.TourCode != "NULL")
+                            {
+                                tour.TourCode = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.TourCode)?.InnerText ?? "");
+                            }
+
+                            var detailDep = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.DepartureLocation)?.InnerText ?? "");
+                            if (!string.IsNullOrEmpty(detailDep))
+                                tour.DepartureLocation = detailDep;
+
+                            var detailDur = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.TourDuration)?.InnerText ?? "");
+                            if (!string.IsNullOrEmpty(detailDur))
+                                tour.Duration = detailDur;
+
+                            tour.Schedule = new List<TourScheduleItem>();
                             var dayTitles = detailHtml.DocumentNode.SelectNodes(config.TourDetailDayTitle)?.ToList() ?? new();
                             var dayContents = detailHtml.DocumentNode.SelectNodes(config.TourDetailDayContent)?.ToList() ?? new();
 
@@ -157,83 +163,138 @@ namespace TouristApp.Services
                             {
                                 tour.Schedule.Add(new TourScheduleItem
                                 {
+                                    Id = i + 1,
                                     DayTitle = CleanText(dayTitles[i].InnerText),
                                     DayContent = CleanText(dayContents[i].InnerText)
                                 });
                             }
 
-                            var noteNode = detailHtml.DocumentNode.SelectSingleNode(config.TourDetailNote);
-                            if (noteNode != null)
+                            tour.ImportantNotes = new Dictionary<string, string>();
+                            var noteNodes = detailHtml.DocumentNode.SelectNodes(config.TourDetailNote);
+                            if (noteNodes != null && noteNodes.Count > 0)
                             {
-                                tour.ImportantNotes["Ghi chú"] = CleanText(noteNode.InnerText);
+                                var notes = string.Join("\n\n", noteNodes.Select(n => CleanText(n.InnerText)));
+                                tour.ImportantNotes["Ghi chú"] = notes;
                             }
-
-                            tour.DepartureLocation = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.DepartureLocation)?.InnerText ?? "");
-                            tour.Duration = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.TourDuration)?.InnerText ?? "");
 
                             var dateNodes = detailHtml.DocumentNode.SelectNodes(config.DepartureDate);
                             if (dateNodes != null)
                             {
-                                tour.DepartureDates = dateNodes.Select(x => CleanText(x.InnerText)).ToList();
+                                tour.DepartureDates = dateNodes
+                                    .Select(x => HtmlEntity.DeEntitize(x.InnerText).Trim())
+                                    .Where(s => !string.IsNullOrEmpty(s))
+                                    .ToList();
                             }
+
+                            driver.Close();
+                            driver.SwitchTo().Window(tabs.First());
                         }
-                        catch (Exception ex)
+                        catch
                         {
-                            Console.WriteLine($"⚠️ Không thể crawl chi tiết tour: {ex.Message}");
+                            try
+                            {
+                                var tabs = driver.WindowHandles;
+                                if (tabs.Count > 1)
+                                {
+                                    driver.Close();
+                                    driver.SwitchTo().Window(tabs.First());
+                                }
+                            }
+                            catch { }
                         }
                     }
 
+                    if (tour.Schedule == null) tour.Schedule = new List<TourScheduleItem>();
+                    if (tour.DepartureDates == null) tour.DepartureDates = new List<string>();
+                    if (tour.ImportantNotes == null) tour.ImportantNotes = new Dictionary<string, string>();
+
+                    // Thêm vào list tour mới
                     tours.Add(tour);
+
+                    // Chỉ break khi đã đủ số tour mới (không bị duplicate, không bản ghi rỗng)
+                    if (tours.Count >= maxTours) break;
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"⚠️ Lỗi khi phân tích tour: {ex.Message}");
-                }
+                catch { }
             }
 
             return tours;
         }
 
-        private string GetTextByXPath(HtmlNode node, string xpath)
+        private static string GetTextByXPath(HtmlNode context, string xPath)
         {
-            if (string.IsNullOrWhiteSpace(xpath)) return "";
-            var raw = node.SelectSingleNode(xpath)?.InnerText ?? "";
-            return CleanText(raw);
-        }
-
-        private string GetTextOrAttr(HtmlNode node, string expr)
-        {
-            if (string.IsNullOrWhiteSpace(expr)) return "";
-            return expr.StartsWith("@")
-                ? node.GetAttributeValue(expr.Replace("@", ""), "")
-                : CleanText(node.SelectSingleNode(expr)?.InnerText ?? "");
-        }
-
-        private string GetAttrByXPath(HtmlNode node, string xpath, string attr)
-        {
-            if (string.IsNullOrWhiteSpace(xpath)) return "";
-
-            var imgNode = node.SelectSingleNode(xpath);
-            if (imgNode == null) return "";
-
-            string value = imgNode.GetAttributeValue(attr ?? "src", "");
-
-            if (string.IsNullOrEmpty(value) && attr != "src")
+            if (string.IsNullOrWhiteSpace(xPath)) return string.Empty;
+            try
             {
-                value = imgNode.GetAttributeValue("src", "");
+                var node = context.SelectSingleNode(xPath);
+                return node != null ? WebUtility.HtmlDecode(node.InnerText ?? string.Empty) : string.Empty;
             }
-
-            return value;
+            catch { return string.Empty; }
         }
 
-        private string CleanText(string input)
+        private static string GetTextOrAttr(HtmlNode context, string expr)
         {
-            if (string.IsNullOrWhiteSpace(input)) return "";
-            string decoded = WebUtility.HtmlDecode(input);
-            string noBreaks = decoded.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
-            string cleaned = Regex.Replace(noBreaks, @"\s{2,}", " ");
-            cleaned = cleaned.Replace(" / ", " ").Replace("/", " ");
-            return cleaned.Trim();
+            if (string.IsNullOrWhiteSpace(expr)) return string.Empty;
+            expr = expr.Trim();
+            try
+            {
+                if (expr.StartsWith("@"))
+                {
+                    var attrName = expr.TrimStart('@');
+                    return context.GetAttributeValue(attrName, string.Empty) ?? string.Empty;
+                }
+                var node = context.SelectSingleNode(expr);
+                return node != null ? WebUtility.HtmlDecode(node.InnerText ?? string.Empty) : string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        private static string GetAttrByXPath(HtmlNode context, string xPath, string attrName)
+        {
+            if (string.IsNullOrWhiteSpace(xPath)) return string.Empty;
+            try
+            {
+                HtmlNode? node = null;
+                if (context.Name.ToLower() == "img")
+                {
+                    node = context;
+                }
+                else
+                {
+                    node = context.SelectSingleNode(xPath);
+                }
+
+                if (node == null)
+                    return string.Empty;
+
+                var name = string.IsNullOrWhiteSpace(attrName) ? "href" : attrName.Trim().ToLower();
+
+                string[] fallbackAttrs;
+                if (name == "src")
+                    fallbackAttrs = new string[] { "src", "data-src" };
+                else if (name == "data-src")
+                    fallbackAttrs = new string[] { "data-src", "src" };
+                else
+                    fallbackAttrs = new string[] { name };
+
+                foreach (var attr in fallbackAttrs)
+                {
+                    var val = node.GetAttributeValue(attr, null);
+                    if (!string.IsNullOrWhiteSpace(val))
+                        return val;
+                }
+                return string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        private static string CleanText(string? input)
+        {
+            if (string.IsNullOrEmpty(input)) return string.Empty;
+            var s = WebUtility.HtmlDecode(input);
+            s = Regex.Replace(s, @"\s+\n", "\n");
+            s = Regex.Replace(s, @"\n\s+", "\n");
+            s = Regex.Replace(s, @"\s{2,}", " ");
+            return s.Trim();
         }
     }
 }

@@ -25,7 +25,7 @@
         public DateTime CreatedAt { get; set; }
         public string LoadMoreButtonSelector { get; set; } = string.Empty;
         public string LoadMoreType { get; set; } = "class";
-        public int LoadMoreButtonIndex { get; set; } = -1; // -1 = chọn nút cuối, 0 = nút đầu tiên, 1 = nút thứ 2, v.v.
+        /*   public int LoadMoreButtonIndex { get; set; } = -1; */
 
     }
 }
