@@ -68,12 +68,22 @@ namespace TouristApp.Services
                                 TourName = GetText(node, config.TourName),
                                 TourCode = GetText(node, config.TourCode),
                                 Price = GetText(node, config.TourPrice),
+
+                                // Lấy ảnh theo XPath + thuộc tính
                                 ImageUrl = GetAttribute(node, config.ImageUrl, config.ImageAttr),
+
                                 DepartureLocation = GetText(node, config.DepartureLocation),
                                 DepartureDates = GetMultipleTexts(node, config.DepartureDate),
                                 Duration = GetText(node, config.TourDuration),
+
+                                // Link chi tiết theo XPath + thuộc tính
                                 TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
                             };
+
+                            // 🔧 Chuẩn hoá URL ảnh & link chi tiết thành absolute
+                            tour.ImageUrl = NormalizeUrl(config.BaseDomain, tour.ImageUrl);
+                            tour.TourDetailUrl = NormalizeUrl(config.BaseDomain, tour.TourDetailUrl);
+
                             tours.Add(tour);
                         }
                         catch (Exception ex)
@@ -87,14 +97,13 @@ namespace TouristApp.Services
                 }
             }
 
+            // Crawl chi tiết
             foreach (var tour in tours)
             {
                 if (!string.IsNullOrEmpty(tour.TourDetailUrl))
                 {
-                    var fullUrl = tour.TourDetailUrl.StartsWith("http")
-                        ? tour.TourDetailUrl
-                        : $"{config.BaseDomain.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
-                    await CrawlDetailWithHtmlAgilityPackAsync(tour, fullUrl, config);
+                    // TourDetailUrl đã absolute ở trên
+                    await CrawlDetailWithHtmlAgilityPackAsync(tour, tour.TourDetailUrl, config);
                 }
             }
 
@@ -134,6 +143,7 @@ namespace TouristApp.Services
                 {
                     tour.Schedule.Add(new TourScheduleItem
                     {
+                        Id = tour.Schedule.Count + 1, // gán id tăng dần
                         DayTitle = HtmlEntity.DeEntitize(days[i].InnerText.Trim()),
                         DayContent = HtmlEntity.DeEntitize(contents[i].InnerText.Trim())
                     });
@@ -205,7 +215,7 @@ namespace TouristApp.Services
             // 2) Tách theo tài liệu + anchor
             ExtractByDocumentOrder(scope, CanonizeHeading, Merge);
 
-            // 3) Hậu kiểm & tái phân phối (đặc biệt “CHI PHÍ TRẺ EM” có dính anchor khác)
+            // 3) Hậu kiểm & tái phân phối
             ReclassifyMisplaced(bucket);
 
             // 4) Build kết quả
@@ -235,14 +245,13 @@ namespace TouristApp.Services
             }
         }
 
-        // ======== Anchor “thật”: theo sau là : ; - – — . " ” » ) hoặc hết dòng ========
+        // ======== Anchor “thật” & helpers (giữ nguyên logic nhóm) ========
         private static readonly Regex AnchorRegex = new Regex(
-            // bao gồm
-            @"(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<inc>\b(DỊCH\s*VỤ\s*BAO\s*GỒM|GIÁ\s*BAO\s*GỒM|INCLUDED?|INCLUDE)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
-          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<exc>\b(DỊCH\s*VỤ\s*KHÔNG\s*BAO\s*GỒM|GIÁ\s*KHÔNG\s*BAO\s*GỒM|KHÔNG\s*BAO\s*GỒM|CHƯA\s*BAO\s*GỒM|NOT\s*INCLUDED?|EXCLUDED?)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
-          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<child>\b(CHI\s*PHÍ\s*TRẺ\s*EM|CHÍNH\s*SÁCH\s*TRẺ\s*EM|TRẺ\s*EM)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
-          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<contract>\b((KÝ|KÍ)\s*HỢP\s*ĐỒNG|ĐẶT\s*CỌC|CỌC\s*TIỀN|THANH\s*TOÁN|HỒ\s*SƠ.*VISA|VISA.*HỒ\s*SƠ|LỊCH\s*HẸN.*(ĐẠI\s*SỨ|LÃNH\s*SỰ))\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
-          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<cancel>\b(QUY\s*ĐỊNH\s*HỦY\s*TOUR|ĐIỀU\s*KIỆN\s*HỦY|CHÍNH\s*SÁCH\s*HỦY|HỦY\s*TOUR|PHÍ\s*HỦY)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)",
+              @"(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<inc>\b(DỊCH\s*VỤ\s*BAO\s*GỒM|GIÁ\s*BAO\s*GỒM|INCLUDED?|INCLUDE)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+            + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<exc>\b(DỊCH\s*VỤ\s*KHÔNG\s*BAO\s*GỒM|GIÁ\s*KHÔNG\s*BAO\s*GỒM|KHÔNG\s*BAO\s*GỒM|CHƯA\s*BAO\s*GỒM|NOT\s*INCLUDED?|EXCLUDED?)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+            + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<child>\b(CHI\s*PHÍ\s*TRẺ\s*EM|CHÍNH\s*SÁCH\s*TRẺ\s*EM|TRẺ\s*EM)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+            + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<contract>\b((KÝ|KÍ)\s*HỢP\s*ĐỒNG|ĐẶT\s*CỌC|CỌC\s*TIỀN|THANH\s*TOÁN|HỒ\s*SƠ.*VISA|VISA.*HỒ\s*SƠ|LỊCH\s*HẸN.*(ĐẠI\s*SỨ|LÃNH\s*SỰ))\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+            + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<cancel>\b(QUY\s*ĐỊNH\s*HỦY\s*TOUR|ĐIỀU\s*KIỆN\s*HỦY|CHÍNH\s*SÁCH\s*HỦY|HỦY\s*TOUR|PHÍ\s*HỦY)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         private static string CanonFromMatch(Match m)
@@ -353,7 +362,6 @@ namespace TouristApp.Services
             {
                 var s = line;
 
-                // Dòng chỉ là anchor
                 var onlyAnchor = AnchorRegex.Match(s);
                 if (onlyAnchor.Success && onlyAnchor.Index == 0 && onlyAnchor.Length == s.Length)
                 {
@@ -361,7 +369,6 @@ namespace TouristApp.Services
                     continue;
                 }
 
-                // Nhiều anchor trong một dòng
                 var matches = AnchorRegex.Matches(s);
                 if (matches.Count == 0)
                 {
@@ -374,7 +381,6 @@ namespace TouristApp.Services
                 {
                     var m = matches[i];
 
-                    // phần trước anchor -> nhóm hiện tại
                     if (m.Index > cursor)
                     {
                         var left = s.Substring(cursor, m.Index - cursor).Trim();
@@ -382,10 +388,8 @@ namespace TouristApp.Services
                             merge(currentCanon, new[] { left });
                     }
 
-                    // đổi nhóm
                     currentCanon = CanonFromMatch(m);
 
-                    // bỏ dấu sau anchor ( :, ;, -, –, —, ., ", ”, », ), ] )
                     int startContent = m.Index + m.Length;
                     var after = s.Substring(startContent);
                     after = Regex.Replace(after, @"^\s*[:;,\-–—\.\""“”'’»)\]]\s*", "");
@@ -421,7 +425,6 @@ namespace TouristApp.Services
             var m = AnchorRegex.Match(text);
             if (m.Success) return CanonFromMatch(m);
 
-            // fallback rộng
             var x = ToAsciiLower(CleanText(text));
             if (Regex.IsMatch(x, @"\b(khong|chua)\s*bao\s*gom\b|\bnot\s*include(?:d)?\b|\bexclude(?:d)?\b")) return "dich vu khong bao gom";
             if (Regex.IsMatch(x, @"\b(bao\s*gom|gia\s*bao\s*gom|dich\s*vu\s*bao\s*gom)\b|(?<!not\s)include(?:d)?\b")) return "dich vu bao gom";
@@ -433,7 +436,6 @@ namespace TouristApp.Services
 
         private static void ReclassifyMisplaced(Dictionary<string, HashSet<string>> bucket)
         {
-            // Nếu trong bucket "CHI PHÍ TRẺ EM" có dòng chứa anchor khác -> cắt lại & phân phối
             if (bucket.TryGetValue("chi phi tre em", out var childSet))
             {
                 var original = childSet.ToList();
@@ -460,7 +462,6 @@ namespace TouristApp.Services
                 }
             }
 
-            // Thêm lớp bảo hiểm: nếu dòng rơi nhầm nhóm, chuyển sang nhóm đúng
             string ClassifyLine(string line)
             {
                 var x = ToAsciiLower(CleanText(line));
@@ -533,7 +534,30 @@ namespace TouristApp.Services
             return null;
         }
 
-        // ================== Helpers ==================
+        // ================== URL helpers ==================
+        private static string NormalizeUrl(string baseDomain, string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+            url = url.Trim();
+
+            // already absolute
+            if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                return url;
+
+            // protocol-relative: //cdn.example.com/...
+            if (url.StartsWith("//"))
+                return "https:" + url;
+
+            // relative from root: /path
+            if (url.StartsWith("/"))
+                return baseDomain.TrimEnd('/') + url;
+
+            // other relative: images/..., ?id=...
+            return baseDomain.TrimEnd('/') + "/" + url.TrimStart('/');
+        }
+
+        // ================== Text helpers ==================
         private static string ToAsciiLower(string? s)
         {
             if (string.IsNullOrEmpty(s)) return "";
