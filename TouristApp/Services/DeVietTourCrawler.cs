@@ -54,7 +54,7 @@ namespace TouristApp.Services
 
             // Ngày khởi hành
 
-            var dateList = doc.DocumentNode.SelectNodes("//ul[@class='tdetail-date']/li");
+            var dateList = doc.DocumentNode.SelectNodes("//ul[contains(@class,'tdetail-gen-date')]/li");
             if (dateList != null)
             {
                 foreach (var li in dateList)
