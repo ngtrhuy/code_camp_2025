@@ -46,29 +46,28 @@ namespace TouristApp.Controllers
                         {
                             configs.Add(new
                             {
-                                Id = Convert.ToInt32(reader["id"]),
-                                BaseDomain = reader["base_domain"].ToString(),
-                                BaseUrl = reader["base_url"].ToString(),
-                                TourName = reader["tour_name"].ToString(),
-                                TourCode = reader["tour_code"].ToString(),
-                                TourPrice = reader["tour_price"].ToString(),
-                                ImageUrl = reader["image_url"].ToString(),
-                                DepartureLocation = reader["departure_location"].ToString(),
-                                DepartureDate = reader["departure_date"].ToString(),
-                                TourDuration = reader["tour_duration"].ToString(),
-                                TourDetailUrl = reader["tour_detail_url"].ToString(),
-                                TourDetailDayTitle = reader["tour_detail_day_title"].ToString(),
-                                TourDetailDayContent = reader["tour_detail_day_content"].ToString(),
-                                TourDetailNote = reader["tour_detail_note"].ToString(),
-                                CrawlType = reader["crawl_type"].ToString(),
-                                TourListSelector = reader["tour_list_selector"].ToString(),
-                                ImageAttr = reader["image_attr"].ToString(),
-                                TourDetailAttr = reader["tour_detail_attr"].ToString(),
-                                LoadMoreButtonSelector = reader["load_more_button_selector"].ToString(),
-                                LoadMoreType = reader["load_more_type"].ToString(),
-                                PagingType = reader["paging_type"].ToString()
-                           
-                        });
+                                Id = reader["id"],
+                                BaseDomain = reader["base_domain"],
+                                BaseUrl = reader["base_url"],
+                                TourListSelector = reader["tour_list_selector"],
+                                TourName = reader["tour_name"],
+                                TourCode = reader["tour_code"],
+                                TourPrice = reader["tour_price"],
+                                ImageUrl = reader["image_url"],
+                                DepartureLocation = reader["departure_location"],
+                                DepartureDate = reader["departure_date"],
+                                TourDuration = reader["tour_duration"],
+                                TourDetailUrl = reader["tour_detail_url"],
+                                TourDetailDayTitle = reader["tour_detail_day_title"],
+                                TourDetailDayContent = reader["tour_detail_day_content"],
+                                TourDetailNote = reader["tour_detail_note"],
+                                CrawlType = reader["crawl_type"],
+                                LoadMoreButtonSelector = reader["load_more_button_selector"],
+
+                                LoadMoreType = reader["load_more_type"],
+                                /*LoadMoreButtonIndex = reader["load_more_button_index"],*/
+                                PagingType = reader["paging_type"]
+                            });
                         }
                     }
                 }
