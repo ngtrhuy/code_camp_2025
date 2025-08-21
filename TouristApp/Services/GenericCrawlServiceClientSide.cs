@@ -37,16 +37,50 @@ namespace TouristApp.Services
             driver.Navigate().GoToUrl(config.BaseUrl);
 
             // Paging kiểu "load more"
+            /*  if (config.PagingType == "load_more")
+              {
+                  while (true)
+                  {
+                      var currentDoc = new HtmlDocument();
+                      currentDoc.LoadHtml(driver.PageSource);
+                      var currentNodes = currentDoc.DocumentNode.SelectNodes(config.TourListSelector);
+                      int currentCount = currentNodes?.Count ?? 0;
+
+                      if (currentCount >= maxTours) break;
+
+                      IWebElement? loadMoreButton = null;
+                      if (!string.IsNullOrEmpty(config.LoadMoreButtonSelector))
+                      {
+                          if (config.LoadMoreType == "id")
+                              loadMoreButton = driver.FindElements(By.Id(config.LoadMoreButtonSelector.Replace("#", ""))).FirstOrDefault();
+                          else if (config.LoadMoreType == "class")
+                              loadMoreButton = driver.FindElements(By.ClassName(config.LoadMoreButtonSelector.Replace(".", ""))).FirstOrDefault();
+                          else if (config.LoadMoreType == "xpath")
+                              loadMoreButton = driver.FindElements(By.XPath(config.LoadMoreButtonSelector)).FirstOrDefault();
+                      }
+
+                      if (loadMoreButton == null) break;
+
+                      var js = (IJavaScriptExecutor)driver;
+                      js.ExecuteScript("arguments[0].scrollIntoView({block:'center'});", loadMoreButton);
+                      js.ExecuteScript("arguments[0].click();", loadMoreButton);
+                      Thread.Sleep(6000);
+
+                      var newDoc = new HtmlDocument();
+                      newDoc.LoadHtml(driver.PageSource);
+                      var newCount = newDoc.DocumentNode.SelectNodes(config.TourListSelector)?.Count ?? 0;
+                      if (newCount <= currentCount) break;
+                  }
+              }*/
             if (config.PagingType == "load_more")
             {
+                int prevCount = 0;
                 while (true)
                 {
                     var currentDoc = new HtmlDocument();
                     currentDoc.LoadHtml(driver.PageSource);
                     var currentNodes = currentDoc.DocumentNode.SelectNodes(config.TourListSelector);
                     int currentCount = currentNodes?.Count ?? 0;
-
-                    if (currentCount >= maxTours) break;
 
                     IWebElement? loadMoreButton = null;
                     if (!string.IsNullOrEmpty(config.LoadMoreButtonSelector))
@@ -59,17 +93,16 @@ namespace TouristApp.Services
                             loadMoreButton = driver.FindElements(By.XPath(config.LoadMoreButtonSelector)).FirstOrDefault();
                     }
 
-                    if (loadMoreButton == null) break;
+                    // Nếu không còn nút loadmore hoặc không còn tour mới xuất hiện thì break
+                    if (loadMoreButton == null || currentCount == prevCount)
+                        break;
 
                     var js = (IJavaScriptExecutor)driver;
                     js.ExecuteScript("arguments[0].scrollIntoView({block:'center'});", loadMoreButton);
                     js.ExecuteScript("arguments[0].click();", loadMoreButton);
                     Thread.Sleep(6000);
 
-                    var newDoc = new HtmlDocument();
-                    newDoc.LoadHtml(driver.PageSource);
-                    var newCount = newDoc.DocumentNode.SelectNodes(config.TourListSelector)?.Count ?? 0;
-                    if (newCount <= currentCount) break;
+                    prevCount = currentCount;
                 }
             }
 
@@ -240,7 +273,9 @@ namespace TouristApp.Services
                 }
             }
 
-            return tours;
+            /*            return tours;*/
+            return tours.Take(maxTours).ToList();
+
         }
 
         // Fallback đa class phổ biến, ưu tiên config
