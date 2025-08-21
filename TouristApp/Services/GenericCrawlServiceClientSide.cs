@@ -1,53 +1,84 @@
 using HtmlAgilityPack;
-using TouristApp.Models;
 using MySqlConnector;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
-using System.Globalization;
-using System.Text;
+using System.Net;
 using System.Text.RegularExpressions;
+using TouristApp.Models;
 
 namespace TouristApp.Services
 {
     public class GenericCrawlServiceClientSide : IGenericCrawlService
     {
-        private readonly string _connStr = "server=localhost;database=code_camp_2025;uid=root;pwd=;";
+        private readonly TourRepository _tourRepository;
 
-        string SafeGetString(MySqlDataReader reader, string columnName)
+        public GenericCrawlServiceClientSide()
         {
-            var ordinal = reader.GetOrdinal(columnName);
-            return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
+            var config = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build();
+            _tourRepository = new TourRepository(config);
         }
 
         public async Task<List<StandardTourModel>> CrawlFromPageConfigAsync(int configId)
+            => await CrawlFromPageConfigAsync(configId, 100);
+
+        public async Task<List<StandardTourModel>> CrawlFromPageConfigAsync(int configId, int maxTours)
         {
             var config = await LoadPageConfig(configId);
             if (config == null) return new List<StandardTourModel>();
-
-            List<StandardTourModel> tours = new();
 
             var options = new ChromeOptions();
             options.AddArgument("--headless");
             options.AddArgument("--disable-gpu");
             options.AddArgument("--no-sandbox");
 
+            List<StandardTourModel> tours = new();
+
             using var driver = new ChromeDriver(options);
             driver.Navigate().GoToUrl(config.BaseUrl);
 
-            if (config.PagingType == "load_more" || config.PagingType == "carousel")
+            // Paging kiểu "load more"
+            if (config.PagingType == "load_more")
             {
-                await HandleDynamicPaging(driver, config.PagingType);
+                while (true)
+                {
+                    var currentDoc = new HtmlDocument();
+                    currentDoc.LoadHtml(driver.PageSource);
+                    var currentNodes = currentDoc.DocumentNode.SelectNodes(config.TourListSelector);
+                    int currentCount = currentNodes?.Count ?? 0;
+
+                    if (currentCount >= maxTours) break;
+
+                    IWebElement? loadMoreButton = null;
+                    if (!string.IsNullOrEmpty(config.LoadMoreButtonSelector))
+                    {
+                        if (config.LoadMoreType == "id")
+                            loadMoreButton = driver.FindElements(By.Id(config.LoadMoreButtonSelector.Replace("#", ""))).FirstOrDefault();
+                        else if (config.LoadMoreType == "class")
+                            loadMoreButton = driver.FindElements(By.ClassName(config.LoadMoreButtonSelector.Replace(".", ""))).FirstOrDefault();
+                        else if (config.LoadMoreType == "xpath")
+                            loadMoreButton = driver.FindElements(By.XPath(config.LoadMoreButtonSelector)).FirstOrDefault();
+                    }
+
+                    if (loadMoreButton == null) break;
+
+                    var js = (IJavaScriptExecutor)driver;
+                    js.ExecuteScript("arguments[0].scrollIntoView({block:'center'});", loadMoreButton);
+                    js.ExecuteScript("arguments[0].click();", loadMoreButton);
+                    Thread.Sleep(6000);
+
+                    var newDoc = new HtmlDocument();
+                    newDoc.LoadHtml(driver.PageSource);
+                    var newCount = newDoc.DocumentNode.SelectNodes(config.TourListSelector)?.Count ?? 0;
+                    if (newCount <= currentCount) break;
+                }
             }
 
-            var html = driver.PageSource;
             var doc = new HtmlDocument();
-            doc.LoadHtml(html);
-
+            doc.LoadHtml(driver.PageSource);
             var nodes = doc.DocumentNode.SelectNodes(config.TourListSelector);
-            Console.WriteLine($"📄 Số lượng tour crawl được: {nodes?.Count ?? 0}");
 
-            var normalizedBaseDomain = NormalizeBaseDomain(config.BaseDomain); // https://domain
-            var hostOnly = GetHost(normalizedBaseDomain);                      // domain
+            var codeSet = new HashSet<string>();
+            var urlSet = new HashSet<string>();
 
             if (nodes != null)
             {
@@ -57,174 +88,260 @@ namespace TouristApp.Services
                     {
                         var tour = new StandardTourModel
                         {
-                            TourName = GetText(node, config.TourName),
-                            TourCode = GetText(node, config.TourCode),
-                            Price = GetText(node, config.TourPrice),
-                            ImageUrl = GetAttribute(node, config.ImageUrl, config.ImageAttr),
-                            DepartureLocation = GetText(node, config.DepartureLocation),
-                            DepartureDates = GetMultipleTexts(node, config.DepartureDate),
-                            Duration = GetText(node, config.TourDuration),
-                            TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
-                            SourceSite = hostOnly
+                            TourName = CleanText(GetTextByXPath(node, config.TourName)),
+                            TourCode = config.TourCode == "NULL" ? "" : CleanText(GetTextOrAttr(node, config.TourCode)),
+                            Price = CleanText(GetTextByXPath(node, config.TourPrice)),
+                            ImageUrl = ToAbsoluteUrl(config.BaseDomain, GetAttrByXPath(node, config.ImageUrl, config.ImageAttr)),
+
+                            TourDetailUrl = GetAttrByXPath(node, config.TourDetailUrl, config.TourDetailAttr),
+                            DepartureLocation = CleanText(GetTextByXPath(node, config.DepartureLocation)),
+                            Duration = CleanText(GetTextByXPath(node, config.TourDuration)),
+                            SourceSite = new Uri(config.BaseDomain).Host.Replace("www.", "")
+
                         };
 
-                        if (string.IsNullOrWhiteSpace(tour.TourCode))
-                            tour.TourCode = MakeSafeCode(tour.TourName, tour.TourDetailUrl);
-                        tour.Duration = TrimDuration(tour.Duration);
+                        if (string.IsNullOrWhiteSpace(tour.TourName)
+                            && string.IsNullOrWhiteSpace(tour.TourCode)
+                            && string.IsNullOrWhiteSpace(tour.TourDetailUrl))
+                            continue;
+
+                        if (!string.IsNullOrEmpty(tour.TourDetailUrl) && !tour.TourDetailUrl.StartsWith("http"))
+                            tour.TourDetailUrl = config.BaseDomain.TrimEnd('/') + "/" + tour.TourDetailUrl.TrimStart('/');
+
+                        var codeKey = tour.TourCode?.Trim() ?? "";
+                        var urlKey = tour.TourDetailUrl?.Trim() ?? "";
+
+                        if (_tourRepository.IsTourExists(codeKey, urlKey))
+                            continue;
+                        if (!string.IsNullOrWhiteSpace(codeKey) && codeSet.Contains(codeKey)) continue;
+                        if (!string.IsNullOrWhiteSpace(urlKey) && urlSet.Contains(urlKey)) continue;
+                        if (!string.IsNullOrWhiteSpace(codeKey)) codeSet.Add(codeKey);
+                        if (!string.IsNullOrWhiteSpace(urlKey)) urlSet.Add(urlKey);
+
+                        // Crawl detail nếu có url
+                        if (!string.IsNullOrEmpty(tour.TourDetailUrl))
+                        {
+                            try
+                            {
+                                ((IJavaScriptExecutor)driver).ExecuteScript("window.open();");
+                                var tabs = driver.WindowHandles;
+                                driver.SwitchTo().Window(tabs.Last());
+                                driver.Navigate().GoToUrl(tour.TourDetailUrl);
+                                Thread.Sleep(2000);
+
+                                var detailSource = driver.PageSource;
+                                var detailHtml = new HtmlDocument();
+                                detailHtml.LoadHtml(detailSource);
+
+                                // Lấy Title ngày: Ưu tiên lấy bằng config, nếu ko có thì fallback 1 số class phổ biến
+                                var dayTitles = TrySelectNodesWithFallback(
+                                    detailHtml, config.TourDetailDayTitle,
+                                    new List<string> {
+                                        "//div[contains(@class,'itinerary-box')]//div[contains(@class,'iti-day-title')]",
+                                        "//div[contains(@class,'ngaylichtrinh')]",
+                                        "//div[contains(@class,'day-title')]"
+                                    }
+                                );
+
+                                // Lấy Content ngày: giống như trên
+                                var dayContents = TrySelectNodesWithFallback(
+                                    detailHtml, config.TourDetailDayContent,
+                                    new List<string> {
+                                        "//div[contains(@class,'itinerary-box')]//div[contains(@class,'iti-day-content')]",
+                                        "//div[contains(@class,'noidunglichtrinh')]",
+                                        "//div[contains(@class,'day-content')]"
+                                    }
+                                );
+
+                                tour.Schedule = new List<TourScheduleItem>();
+                                for (int i = 0; i < Math.Min(dayTitles.Count, dayContents.Count); i++)
+                                {
+                                    tour.Schedule.Add(new TourScheduleItem
+                                    {
+                                        Id = i + 1,
+                                        DayTitle = CleanText(dayTitles[i].InnerText),
+                                        DayContent = CleanText(dayContents[i].InnerText)
+                                    });
+                                }
+
+                                // Notes
+                                var noteNodes = TrySelectNodesWithFallback(
+                                    detailHtml, config.TourDetailNote,
+                                    new List<string> {
+                                        "//div[contains(@class,'service-policy')]",
+                                        "//div[contains(@class,'note')]"
+                                    }
+                                );
+
+                                tour.ImportantNotes = new Dictionary<string, string>();
+                                if (noteNodes.Count > 0)
+                                {
+                                    var notes = string.Join("\n\n", noteNodes.Select(n => CleanText(n.InnerText)));
+                                    tour.ImportantNotes["Ghi chú"] = notes;
+                                }
+
+                                // Departure Dates
+                                var dateNodes = TrySelectNodesWithFallback(
+                                    detailHtml, config.DepartureDate,
+                                    new List<string> {
+                                        "//div[contains(@class,'list-depart-date')]//span",
+                                        "//span[contains(@class,'depart-date')]"
+                                    }
+                                );
+                                if (dateNodes.Count > 0)
+                                {
+                                    tour.DepartureDates = dateNodes
+                                        .Select(x => HtmlEntity.DeEntitize(x.InnerText).Trim())
+                                        .Where(s => !string.IsNullOrEmpty(s))
+                                        .ToList();
+                                }
+
+                                // Code fallback
+                                if (string.IsNullOrWhiteSpace(tour.TourCode) && config.TourCode != "NULL")
+                                {
+                                    tour.TourCode = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.TourCode)?.InnerText ?? "");
+                                }
+
+                                var detailDep = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.DepartureLocation)?.InnerText ?? "");
+                                if (!string.IsNullOrEmpty(detailDep))
+                                    tour.DepartureLocation = detailDep;
+
+                                var detailDur = CleanText(detailHtml.DocumentNode.SelectSingleNode(config.TourDuration)?.InnerText ?? "");
+                                if (!string.IsNullOrEmpty(detailDur))
+                                    tour.Duration = detailDur;
+
+                                driver.Close();
+                                driver.SwitchTo().Window(tabs.First());
+                            }
+                            catch
+                            {
+                                try
+                                {
+                                    var tabs = driver.WindowHandles;
+                                    if (tabs.Count > 1)
+                                    {
+                                        driver.Close();
+                                        driver.SwitchTo().Window(tabs.First());
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+
+                        if (tour.Schedule == null) tour.Schedule = new List<TourScheduleItem>();
+                        if (tour.DepartureDates == null) tour.DepartureDates = new List<string>();
+                        if (tour.ImportantNotes == null) tour.ImportantNotes = new Dictionary<string, string>();
 
                         tours.Add(tour);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"⚠️ Lỗi parse tour: {ex.Message}");
-                    }
-                }
-            }
 
-            foreach (var tour in tours)
-            {
-                if (!string.IsNullOrEmpty(tour.TourDetailUrl))
-                {
-                    var fullUrl = BuildAbsoluteUrl(normalizedBaseDomain, tour.TourDetailUrl);
-                    await CrawlDetailWithSeleniumAsync(tour, fullUrl, config);
+                        if (tours.Count >= maxTours) break;
+                    }
+                    catch { }
                 }
             }
 
             return tours;
         }
 
-        private async Task HandleDynamicPaging(ChromeDriver driver, string pagingType)
+        // Fallback đa class phổ biến, ưu tiên config
+        private static List<HtmlNode> TrySelectNodesWithFallback(HtmlDocument doc, string? primarySelector, List<string> fallbackXpaths)
         {
-            int maxLoad = 10, loadCount = 0;
-            while (loadCount < maxLoad)
+            List<HtmlNode> nodes = new();
+            if (!string.IsNullOrWhiteSpace(primarySelector))
             {
-                try
-                {
-                    ((IJavaScriptExecutor)driver).ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
-                    await Task.Delay(2000);
-
-                    if (pagingType == "load_more")
-                    {
-                        var btn = driver.FindElements(By.XPath("//button[contains(text(),'Xem thêm') or contains(text(),'Load more') or contains(text(),'Tải thêm')]")).FirstOrDefault();
-                        if (btn != null && btn.Displayed) { btn.Click(); await Task.Delay(2000); } else break;
-                    }
-                    else
-                    {
-                        var next = driver.FindElements(By.XPath("//button[contains(@class,'next') or contains(@class,'arrow-right')]")).FirstOrDefault();
-                        if (next != null && next.Displayed) { next.Click(); await Task.Delay(2000); } else break;
-                    }
-
-                    loadCount++;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"⚠️ Lỗi xử lý phân trang: {ex.Message}");
-                    break;
-                }
+                var n = doc.DocumentNode.SelectNodes(primarySelector);
+                if (n != null && n.Count > 0) return n.ToList();
             }
+            foreach (var xpath in fallbackXpaths)
+            {
+                var n = doc.DocumentNode.SelectNodes(xpath);
+                if (n != null && n.Count > 0) return n.ToList();
+            }
+            return nodes;
         }
 
-        private string GetText(HtmlNode node, string xpath) =>
-            node.SelectSingleNode(xpath)?.InnerText.Trim() ?? string.Empty;
-
-        private string GetAttribute(HtmlNode node, string xpath, string attr) =>
-            node.SelectSingleNode(xpath)?.GetAttributeValue(attr, "") ?? string.Empty;
-
-        private List<string> GetMultipleTexts(HtmlNode node, string xpath) =>
-            node.SelectNodes(xpath)?.Select(n => n.InnerText.Trim()).ToList() ?? new List<string>();
-
-        private async Task CrawlDetailWithSeleniumAsync(StandardTourModel tour, string url, PageConfigModel config)
+        private static string GetTextByXPath(HtmlNode context, string xPath)
         {
-            var options = new ChromeOptions();
-            options.AddArgument("--headless");
-            options.AddArgument("--disable-gpu");
-            options.AddArgument("--no-sandbox");
-
+            if (string.IsNullOrWhiteSpace(xPath)) return string.Empty;
             try
             {
-                using var driver = new ChromeDriver(options);
-                driver.Navigate().GoToUrl(url);
-                await Task.Delay(2000);
-
-                var html = driver.PageSource;
-                var doc = new HtmlDocument();
-                doc.LoadHtml(html);
-
-                ParseTourDetailFromHtml(doc, tour, config);
+                var node = context.SelectSingleNode(xPath);
+                return node != null ? WebUtility.HtmlDecode(node.InnerText ?? string.Empty) : string.Empty;
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ Lỗi crawl chi tiết (Selenium): {ex.Message}");
-            }
+            catch { return string.Empty; }
         }
 
-        private void ParseTourDetailFromHtml(HtmlDocument doc, StandardTourModel tour, PageConfigModel config)
+        private static string GetTextOrAttr(HtmlNode context, string expr)
         {
-            var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
-            var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
-
-            if (days != null && contents != null && days.Count == contents.Count)
+            if (string.IsNullOrWhiteSpace(expr)) return string.Empty;
+            expr = expr.Trim();
+            try
             {
-                for (int i = 0; i < days.Count; i++)
+                if (expr.StartsWith("@"))
                 {
-                    tour.Schedule.Add(new TourScheduleItem
-                    {
-                        DayTitle = HtmlEntity.DeEntitize(days[i].InnerText.Trim()),
-                        DayContent = HtmlEntity.DeEntitize(contents[i].InnerText.Trim())
-                    });
+                    var attrName = expr.TrimStart('@');
+                    return context.GetAttributeValue(attrName, string.Empty) ?? string.Empty;
                 }
+                var node = context.SelectSingleNode(expr);
+                return node != null ? WebUtility.HtmlDecode(node.InnerText ?? string.Empty) : string.Empty;
             }
-
-            var noteRoots = doc.DocumentNode.SelectNodes(config.TourDetailNote);
-
-            if (noteRoots == null || noteRoots.Count == 0)
-            {
-                var noteRoot = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
-                if (noteRoot != null)
-                {
-                    string currentHeading = "";
-                    foreach (var child in noteRoot.ChildNodes)
-                    {
-                        if (child.NodeType != HtmlNodeType.Element) continue;
-
-                        if (child.Name.StartsWith("h", StringComparison.OrdinalIgnoreCase))
-                        {
-                            currentHeading = HtmlEntity.DeEntitize(child.InnerText.Trim());
-                            if (!tour.ImportantNotes.ContainsKey(currentHeading))
-                                tour.ImportantNotes[currentHeading] = "";
-                        }
-                        else if (!string.IsNullOrEmpty(currentHeading))
-                        {
-                            string content = HtmlEntity.DeEntitize(child.InnerText.Trim());
-                            if (!string.IsNullOrWhiteSpace(content))
-                                tour.ImportantNotes[currentHeading] += content + "\n";
-                        }
-                    }
-
-                    foreach (var key in tour.ImportantNotes.Keys.ToList())
-                        tour.ImportantNotes[key] = tour.ImportantNotes[key].Trim();
-                }
-            }
-            else
-            {
-                foreach (var noteRoot in noteRoots)
-                {
-                    var heading = noteRoot.SelectSingleNode(".//h3|.//h4")?.InnerText?.Trim() ?? "";
-                    var contentNode = noteRoot.SelectSingleNode(".//ul");
-                    var contentText = HtmlEntity.DeEntitize(contentNode?.InnerText?.Trim() ?? "");
-
-                    if (!string.IsNullOrEmpty(heading) && !string.IsNullOrEmpty(contentText))
-                    {
-                        if (!tour.ImportantNotes.ContainsKey(heading))
-                            tour.ImportantNotes[heading] = contentText;
-                    }
-                }
-            }
+            catch { return string.Empty; }
         }
 
+        private static string GetAttrByXPath(HtmlNode context, string xPath, string attrName)
+        {
+            if (string.IsNullOrWhiteSpace(xPath)) return string.Empty;
+            try
+            {
+                HtmlNode? node = null;
+                if (context.Name.ToLower() == "img")
+                {
+                    node = context;
+                }
+                else
+                {
+                    node = context.SelectSingleNode(xPath);
+                }
+
+                if (node == null)
+                    return string.Empty;
+
+                var name = string.IsNullOrWhiteSpace(attrName) ? "href" : attrName.Trim().ToLower();
+
+                string[] fallbackAttrs;
+                if (name == "src")
+                    fallbackAttrs = new string[] { "src", "data-src" };
+                else if (name == "data-src")
+                    fallbackAttrs = new string[] { "data-src", "src" };
+                else
+                    fallbackAttrs = new string[] { name };
+
+                foreach (var attr in fallbackAttrs)
+                {
+                    var val = node.GetAttributeValue(attr, null);
+                    if (!string.IsNullOrWhiteSpace(val))
+                        return val;
+                }
+                return string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        private static string CleanText(string? input)
+        {
+            if (string.IsNullOrEmpty(input)) return string.Empty;
+            var s = WebUtility.HtmlDecode(input);
+            s = Regex.Replace(s, @"\s+\n", "\n");
+            s = Regex.Replace(s, @"\n\s+", "\n");
+            s = Regex.Replace(s, @"\s{2,}", " ");
+            return s.Trim();
+        }
+
+        // Load config từ DB (y chang file cũ)
         public async Task<PageConfigModel?> LoadPageConfig(int id)
         {
-            using var conn = new MySqlConnection(_connStr);
+            string connStr = "server=localhost;database=code_camp_2025;uid=root;pwd=;";
+            using var conn = new MySqlConnection(connStr);
             await conn.OpenAsync();
 
             var cmd = new MySqlCommand("SELECT * FROM page_config WHERE id = @id", conn);
@@ -235,97 +352,40 @@ namespace TouristApp.Services
             {
                 return new PageConfigModel
                 {
-                    BaseDomain = SafeGetString(reader, "base_domain"),
-                    BaseUrl = SafeGetString(reader, "base_url"),
-                    TourName = SafeGetString(reader, "tour_name"),
-                    TourCode = SafeGetString(reader, "tour_code"),
-                    TourPrice = SafeGetString(reader, "tour_price"),
-                    ImageUrl = SafeGetString(reader, "image_url"),
-                    DepartureLocation = SafeGetString(reader, "departure_location"),
-                    DepartureDate = SafeGetString(reader, "departure_date"),
-                    TourDuration = SafeGetString(reader, "tour_duration"),
-                    TourDetailUrl = SafeGetString(reader, "tour_detail_url"),
-                    TourDetailDayTitle = SafeGetString(reader, "tour_detail_day_title"),
-                    TourDetailDayContent = SafeGetString(reader, "tour_detail_day_content"),
-                    TourDetailNote = SafeGetString(reader, "tour_detail_note"),
-                    CrawlType = SafeGetString(reader, "crawl_type"),
-                    TourListSelector = SafeGetString(reader, "tour_list_selector"),
-                    ImageAttr = SafeGetString(reader, "image_attr"),
-                    TourDetailAttr = SafeGetString(reader, "tour_detail_attr"),
-                    PagingType = SafeGetString(reader, "paging_type"),
+                    Id = reader.GetInt32("id"),
+                    BaseDomain = reader["base_domain"].ToString() ?? "",
+                    BaseUrl = reader["base_url"].ToString() ?? "",
+                    TourName = reader["tour_name"].ToString() ?? "",
+                    TourCode = reader["tour_code"].ToString() ?? "",
+                    TourPrice = reader["tour_price"].ToString() ?? "",
+                    ImageUrl = reader["image_url"].ToString() ?? "",
+                    DepartureLocation = reader["departure_location"].ToString() ?? "",
+                    DepartureDate = reader["departure_date"].ToString() ?? "",
+                    TourDuration = reader["tour_duration"].ToString() ?? "",
+                    PagingType = reader["paging_type"].ToString() ?? "",
+                    TourDetailUrl = reader["tour_detail_url"].ToString() ?? "",
+                    TourDetailDayTitle = reader["tour_detail_day_title"].ToString() ?? "",
+                    TourDetailDayContent = reader["tour_detail_day_content"].ToString() ?? "",
+                    TourDetailNote = reader["tour_detail_note"].ToString() ?? "",
+                    CrawlType = reader["crawl_type"].ToString() ?? "",
+                    TourListSelector = reader["tour_list_selector"].ToString() ?? "",
+                    ImageAttr = reader["image_attr"].ToString() ?? "",
+                    TourDetailAttr = reader["tour_detail_attr"].ToString() ?? "",
+                    LoadMoreButtonSelector = reader["load_more_button_selector"].ToString() ?? "",
+                    LoadMoreType = reader["load_more_type"].ToString() ?? ""
                 };
             }
-
             return null;
         }
 
-        // ===== helpers =====
-        private static string NormalizeBaseDomain(string baseDomain)
+        private static string ToAbsoluteUrl(string baseDomain, string url)
         {
-            var s = (baseDomain ?? "").Trim();
-            if (string.IsNullOrEmpty(s)) return "";
-            if (!s.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-                !s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                s = "https://" + s;
-            return s.TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(url)) return url;
+            if (url.StartsWith("//")) return "https:" + url;
+            if (url.StartsWith("http://") || url.StartsWith("https://")) return url;
+            if (string.IsNullOrWhiteSpace(baseDomain)) return url;
+            return $"{baseDomain.TrimEnd('/')}/{url.TrimStart('/')}";
         }
 
-        private static string GetHost(string normalizedBaseDomain)
-        {
-            if (Uri.TryCreate(normalizedBaseDomain, UriKind.Absolute, out var u) && !string.IsNullOrEmpty(u.Host))
-                return u.Host.ToLowerInvariant();
-            return normalizedBaseDomain
-                .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
-                .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
-                .Trim('/')
-                .ToLowerInvariant();
-        }
-
-        private static string BuildAbsoluteUrl(string normalizedBaseDomain, string maybeRelative)
-        {
-            if (string.IsNullOrWhiteSpace(maybeRelative)) return normalizedBaseDomain;
-            if (Uri.TryCreate(maybeRelative, UriKind.Absolute, out var abs)) return abs.ToString();
-            return $"{normalizedBaseDomain.TrimEnd('/')}/{maybeRelative.TrimStart('/')}";
-        }
-
-        private static string ToAscii(string? s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return "";
-            var t = HtmlEntity.DeEntitize(s);
-            var norm = t.Normalize(NormalizationForm.FormD);
-            var sb = new StringBuilder();
-            foreach (var ch in norm)
-                if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
-                    sb.Append(ch);
-            return sb.ToString().Normalize(NormalizationForm.FormC);
-        }
-
-        private static string MakeSafeCode(string? name, string? url)
-        {
-            string raw = "";
-            if (!string.IsNullOrWhiteSpace(url))
-            {
-                try
-                {
-                    if (Uri.TryCreate(url, UriKind.Absolute, out var u))
-                        raw = u.Segments.Last().Trim('/');
-                    else
-                        raw = url.Split('/').Last();
-                }
-                catch { }
-            }
-            if (string.IsNullOrWhiteSpace(raw)) raw = name ?? "";
-
-            raw = ToAscii(raw).ToUpperInvariant();
-            raw = Regex.Replace(raw, @"[^A-Z0-9]+", "");
-            if (string.IsNullOrWhiteSpace(raw)) raw = "TOUR" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
-            return raw.Length > 80 ? raw[..80] : raw;
-        }
-
-        private static string TrimDuration(string? s)
-        {
-            s = (s ?? "").Trim();
-            return s.Length > 250 ? s[..250] : s;
-        }
     }
 }

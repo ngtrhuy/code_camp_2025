@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using System.Net.Http.Headers;
 using TouristApp.Models;
 using TouristApp.Services;
-using System.Net.Http.Headers;
 
 namespace TouristApp.Controllers
 {
@@ -33,50 +33,54 @@ namespace TouristApp.Controllers
             if (!_http.DefaultRequestHeaders.UserAgent.Any())
                 _http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
         }
+        /*
+                // ✅ Crawl và lưu DB (không dùng history) — giữ nguyên
+                [HttpGet("crawl-and-save/{id}")]
+                public IActionResult CrawlAndSave(int id, [FromQuery] int limit)
+                {
+                    if (limit <= 0) return BadRequest("limit phải > 0");
 
-        // ✅ Crawl và lưu DB (không dùng history) — giữ nguyên
-        [HttpGet("crawl-and-save/{id}")]
-        public IActionResult CrawlAndSave(int id)
-        {
-            var config = GetConfigById(id);
-            if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+                    var config = GetConfigById(id);
+                    if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
 
-            var service = new SeleniumCrawlService();
-            var tours = service.CrawlToursWithSelenium(config);
+                    // Đã sửa ở đây
+                    var service = new SeleniumCrawlService(_tourRepository);
+                    var tours = service.CrawlToursWithSelenium(config, limit);
+                    int savedCount = _tourRepository.SaveTours(tours);
 
-            // ↴ Lưu ảnh về máy + thay URL
-            RewriteImagesToLocal(tours, config.BaseDomain).GetAwaiter().GetResult();
+                    return Ok(new
+                    {
+                        message = "✅ Đã crawl và lưu vào DB",
+                        requested = limit,
+                        totalCrawled = tours.Count,
+                        totalSaved = savedCount
+                    });
+                }
 
-            int savedCount = _tourRepository.SaveTours(tours);
 
-            return Ok(new
-            {
-                message = "✅ Đã crawl và lưu vào DB",
-                totalCrawled = tours.Count,
-                totalSaved = savedCount
-            });
-        }
+                // ✅ Crawl không lưu DB, cho phép nhập số lượng tour qua ?limit=
+                // GET /api/crawl/crawl-only/1?limit=10
+                [HttpGet("crawl-only/{id}")]
+                public IActionResult GetToursOnly(int id, [FromQuery] int limit)
+                {
+                    if (limit <= 0) return BadRequest("limit phải > 0");
 
-        // ✅ Crawl không lưu DB (không dùng history) — giữ nguyên, nhưng trả URL ảnh nội bộ
-        [HttpGet("crawl-only/{id}")]
-        public IActionResult GetToursOnly(int id)
-        {
-            var config = GetConfigById(id);
-            if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+                    var config = GetConfigById(id);
+                    if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
 
-            var service = new SeleniumCrawlService();
-            var tours = service.CrawlToursWithSelenium(config);
+                    // Đã sửa ở đây
+                    var service = new SeleniumCrawlService(_tourRepository);
+                    var tours = service.CrawlToursWithSelenium(config, limit);
 
-            // ↴ Lưu ảnh về máy + thay URL
-            RewriteImagesToLocal(tours, config.BaseDomain).GetAwaiter().GetResult();
-
-            return Ok(new
-            {
-                message = "✅ Đã crawl dữ liệu thành công",
-                totalCrawled = tours.Count,
-                tours
-            });
-        }
+                    return Ok(new
+                    {
+                        message = "✅ Đã crawl dữ liệu thành công",
+                        requested = limit,
+                        totalCrawled = tours.Count,
+                        tours
+                    });
+                }
+        */
 
         // ✅ Load config từ DB — giữ nguyên
         private PageConfigModel? GetConfigById(int id)
@@ -182,9 +186,9 @@ namespace TouristApp.Controllers
             return Ok(new { message = "Crawl started", historyId });
         }
 
-        // ✅ Crawl client-side có HISTORY — thêm bước lưu ảnh + (tuỳ chọn) lưu DB
+
         [HttpGet("client-side/{configId}")]
-        public async Task<IActionResult> CrawlClientSide(int configId)
+        public async Task<IActionResult> CrawlClientSide(int configId, [FromQuery] int limit = 20)
         {
             var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
 
@@ -193,7 +197,7 @@ namespace TouristApp.Controllers
                 try
                 {
                     var service = new GenericCrawlServiceClientSide();
-                    var data = await service.CrawlFromPageConfigAsync(configId);
+                    var data = await service.CrawlFromPageConfigAsync(configId, limit);
 
                     // tải ảnh về máy + thay URL
                     var cfg = await service.LoadPageConfig(configId);
