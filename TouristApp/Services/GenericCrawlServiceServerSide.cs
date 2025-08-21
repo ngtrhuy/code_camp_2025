@@ -37,6 +37,9 @@ namespace TouristApp.Services
                 .Select(url => url.Trim().TrimEnd('/'))
                 .ToList();
 
+            var normalizedBaseDomain = NormalizeBaseDomain(config.BaseDomain); // https://domain.tld
+            var hostOnly = GetHost(normalizedBaseDomain);                      // domain.tld
+
             foreach (var baseUrl in baseUrls)
             {
                 int currentPage = 1;
@@ -73,7 +76,15 @@ namespace TouristApp.Services
                                 DepartureDates = GetMultipleTexts(node, config.DepartureDate),
                                 Duration = GetText(node, config.TourDuration),
                                 TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
+
+                                // ✅ KHÔNG tạo Uri trực tiếp nữa
+                                SourceSite = hostOnly
                             };
+
+                            if (string.IsNullOrWhiteSpace(tour.TourCode))
+                                tour.TourCode = MakeSafeCode(tour.TourName, tour.TourDetailUrl);
+                            tour.Duration = TrimDuration(tour.Duration);
+
                             tours.Add(tour);
                         }
                         catch (Exception ex)
@@ -91,9 +102,7 @@ namespace TouristApp.Services
             {
                 if (!string.IsNullOrEmpty(tour.TourDetailUrl))
                 {
-                    var fullUrl = tour.TourDetailUrl.StartsWith("http")
-                        ? tour.TourDetailUrl
-                        : $"{config.BaseDomain.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
+                    var fullUrl = BuildAbsoluteUrl(normalizedBaseDomain, tour.TourDetailUrl);
                     await CrawlDetailWithHtmlAgilityPackAsync(tour, fullUrl, config);
                 }
             }
@@ -125,7 +134,6 @@ namespace TouristApp.Services
 
         private void ParseTourDetailFromHtml(HtmlDocument doc, StandardTourModel tour, PageConfigModel config)
         {
-            // ========= LỊCH TRÌNH =========
             var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
             var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
             if (days != null && contents != null && days.Count == contents.Count)
@@ -140,7 +148,6 @@ namespace TouristApp.Services
                 }
             }
 
-            // ========= IMPORTANT NOTES =========
             var displayMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "dich vu bao gom", "DỊCH VỤ BAO GỒM" },
@@ -174,7 +181,6 @@ namespace TouristApp.Services
                 }
             }
 
-            // 1) Chọn scope
             HtmlNode scope = doc.DocumentNode;
             if (!string.IsNullOrWhiteSpace(config.TourDetailNote))
             {
@@ -202,23 +208,14 @@ namespace TouristApp.Services
                 if (best != null) scope = best;
             }
 
-            // 2) Tách theo tài liệu + anchor
             ExtractByDocumentOrder(scope, CanonizeHeading, Merge);
-
-            // 3) Hậu kiểm & tái phân phối (đặc biệt “CHI PHÍ TRẺ EM” có dính anchor khác)
             ReclassifyMisplaced(bucket);
 
-            // 4) Build kết quả
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var kv in displayMap)
-            {
-                result[kv.Value] = bucket.TryGetValue(kv.Key, out var items) && items.Count > 0
-                    ? string.Join("\n", items)
-                    : string.Empty;
-            }
+                result[kv.Value] = bucket.TryGetValue(kv.Key, out var items) && items.Count > 0 ? string.Join("\n", items) : string.Empty;
             tour.ImportantNotes = result;
 
-            // ========= NGÀY KHỞI HÀNH (fallback) =========
             if (tour.DepartureDates == null || tour.DepartureDates.Count == 0)
             {
                 var dateNodes = doc.DocumentNode.SelectNodes("//ul[contains(@class, 'tdetail-date')]/li");
@@ -235,13 +232,47 @@ namespace TouristApp.Services
             }
         }
 
-        // ======== Anchor “thật”: theo sau là : ; - – — . " ” » ) hoặc hết dòng ========
+        // ================== Helpers: URL/DOMAIN ==================
+        private static string NormalizeBaseDomain(string baseDomain)
+        {
+            var s = (baseDomain ?? "").Trim();
+            if (string.IsNullOrEmpty(s)) return "";
+            if (!s.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                s = "https://" + s;
+            // bỏ dấu '/' cuối
+            s = s.TrimEnd('/');
+            return s;
+        }
+
+        private static string GetHost(string normalizedBaseDomain)
+        {
+            if (Uri.TryCreate(normalizedBaseDomain, UriKind.Absolute, out var u) && !string.IsNullOrEmpty(u.Host))
+                return u.Host.ToLowerInvariant();
+            // fallback tách tay
+            return normalizedBaseDomain
+                .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
+                .Trim('/')
+                .ToLowerInvariant();
+        }
+
+        private static string BuildAbsoluteUrl(string normalizedBaseDomain, string maybeRelative)
+        {
+            if (string.IsNullOrWhiteSpace(maybeRelative)) return normalizedBaseDomain;
+            if (Uri.TryCreate(maybeRelative, UriKind.Absolute, out var abs)) return abs.ToString();
+            // relative
+            var root = normalizedBaseDomain.TrimEnd('/');
+            var rel = maybeRelative.TrimStart('/');
+            return $"{root}/{rel}";
+        }
+
+        // ======== Anchor regex ========
         private static readonly Regex AnchorRegex = new Regex(
-            // bao gồm
             @"(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<inc>\b(DỊCH\s*VỤ\s*BAO\s*GỒM|GIÁ\s*BAO\s*GỒM|INCLUDED?|INCLUDE)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
           + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<exc>\b(DỊCH\s*VỤ\s*KHÔNG\s*BAO\s*GỒM|GIÁ\s*KHÔNG\s*BAO\s*GỒM|KHÔNG\s*BAO\s*GỒM|CHƯA\s*BAO\s*GỒM|NOT\s*INCLUDED?|EXCLUDED?)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
           + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<child>\b(CHI\s*PHÍ\s*TRẺ\s*EM|CHÍNH\s*SÁCH\s*TRẺ\s*EM|TRẺ\s*EM)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
-          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<contract>\b((KÝ|KÍ)\s*HỢP\s*ĐỒNG|ĐẶT\s*CỌC|CỌC\s*TIỀN|THANH\s*TOÁN|HỒ\s*SƠ.*VISA|VISA.*HỒ\s*SƠ|LỊCH\s*HẸN.*(ĐẠI\s*SỨ|LÃNH\s*SỰ))\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
+          + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<contract>\b((KÝ|KÍ)\s*HỢP\s*ĐỒNG|ĐẶT\s*CỌC|CỌC\s*TIỀN|THANH\s*TOÁN|HỒ\s*SƠ.*VISA|VISA.*HỒ\s*SƠ|LỊCH\s*HẸN.*(ĐẠI\s*SỨ|LÃNH\s*SỨ))\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
           + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<cancel>\b(QUY\s*ĐỊNH\s*HỦY\s*TOUR|ĐIỀU\s*KIỆN\s*HỦY|CHÍNH\s*SÁCH\s*HỦY|HỦY\s*TOUR|PHÍ\s*HỦY)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -374,7 +405,6 @@ namespace TouristApp.Services
                 {
                     var m = matches[i];
 
-                    // phần trước anchor -> nhóm hiện tại
                     if (m.Index > cursor)
                     {
                         var left = s.Substring(cursor, m.Index - cursor).Trim();
@@ -382,10 +412,8 @@ namespace TouristApp.Services
                             merge(currentCanon, new[] { left });
                     }
 
-                    // đổi nhóm
                     currentCanon = CanonFromMatch(m);
 
-                    // bỏ dấu sau anchor ( :, ;, -, –, —, ., ", ”, », ), ] )
                     int startContent = m.Index + m.Length;
                     var after = s.Substring(startContent);
                     after = Regex.Replace(after, @"^\s*[:;,\-–—\.\""“”'’»)\]]\s*", "");
@@ -421,7 +449,6 @@ namespace TouristApp.Services
             var m = AnchorRegex.Match(text);
             if (m.Success) return CanonFromMatch(m);
 
-            // fallback rộng
             var x = ToAsciiLower(CleanText(text));
             if (Regex.IsMatch(x, @"\b(khong|chua)\s*bao\s*gom\b|\bnot\s*include(?:d)?\b|\bexclude(?:d)?\b")) return "dich vu khong bao gom";
             if (Regex.IsMatch(x, @"\b(bao\s*gom|gia\s*bao\s*gom|dich\s*vu\s*bao\s*gom)\b|(?<!not\s)include(?:d)?\b")) return "dich vu bao gom";
@@ -433,7 +460,6 @@ namespace TouristApp.Services
 
         private static void ReclassifyMisplaced(Dictionary<string, HashSet<string>> bucket)
         {
-            // Nếu trong bucket "CHI PHÍ TRẺ EM" có dòng chứa anchor khác -> cắt lại & phân phối
             if (bucket.TryGetValue("chi phi tre em", out var childSet))
             {
                 var original = childSet.ToList();
@@ -460,7 +486,6 @@ namespace TouristApp.Services
                 }
             }
 
-            // Thêm lớp bảo hiểm: nếu dòng rơi nhầm nhóm, chuyển sang nhóm đúng
             string ClassifyLine(string line)
             {
                 var x = ToAsciiLower(CleanText(line));
@@ -532,8 +557,7 @@ namespace TouristApp.Services
 
             return null;
         }
-
-        // ================== Helpers ==================
+        // ================== Helpers khác ==================
         private static string ToAsciiLower(string? s)
         {
             if (string.IsNullOrEmpty(s)) return "";
@@ -557,6 +581,44 @@ namespace TouristApp.Services
         public Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config)
         {
             throw new NotImplementedException();
+        private static string ToAscii(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "";
+            var t = HtmlEntity.DeEntitize(s);
+            var norm = t.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder();
+            foreach (var ch in norm)
+                if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+                    sb.Append(ch);
+            return sb.ToString().Normalize(NormalizationForm.FormC);
+        }
+
+        private static string MakeSafeCode(string? name, string? url)
+        {
+            string raw = "";
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                try
+                {
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var u))
+                        raw = u.Segments.Last().Trim('/');
+                    else
+                        raw = url.Split('/').Last();
+                }
+                catch { }
+            }
+            if (string.IsNullOrWhiteSpace(raw)) raw = name ?? "";
+
+            raw = ToAscii(raw).ToUpperInvariant();
+            raw = Regex.Replace(raw, @"[^A-Z0-9]+", "");
+            if (string.IsNullOrWhiteSpace(raw)) raw = "TOUR" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+            return raw.Length > 80 ? raw[..80] : raw;
+        }
+
+        private static string TrimDuration(string? s)
+        {
+            s = (s ?? "").Trim();
+            return s.Length > 250 ? s[..250] : s;
         }
     }
 }
