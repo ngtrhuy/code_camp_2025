@@ -13,6 +13,8 @@
         public List<string> DepartureDates { get; set; } = new List<string>();
         public Dictionary<string, string> ImportantNotes { get; set; } = new Dictionary<string, string>();
 
+        public string? SourceSite { get; set; }
+
         public List<TourScheduleItem> Schedule { get; set; } = new List<TourScheduleItem>();
     }
 

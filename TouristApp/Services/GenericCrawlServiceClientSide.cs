@@ -3,6 +3,9 @@ using TouristApp.Models;
 using MySqlConnector;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace TouristApp.Services
 {
@@ -23,7 +26,6 @@ namespace TouristApp.Services
 
             List<StandardTourModel> tours = new();
 
-            // ✅ Crawl danh sách bằng Selenium (client-side)
             var options = new ChromeOptions();
             options.AddArgument("--headless");
             options.AddArgument("--disable-gpu");
@@ -32,19 +34,20 @@ namespace TouristApp.Services
             using var driver = new ChromeDriver(options);
             driver.Navigate().GoToUrl(config.BaseUrl);
 
-            // Xử lý phân trang động (load_more, carousel)
             if (config.PagingType == "load_more" || config.PagingType == "carousel")
             {
                 await HandleDynamicPaging(driver, config.PagingType);
             }
 
-            // Lấy HTML sau khi JS đã render
             var html = driver.PageSource;
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
 
             var nodes = doc.DocumentNode.SelectNodes(config.TourListSelector);
             Console.WriteLine($"📄 Số lượng tour crawl được: {nodes?.Count ?? 0}");
+
+            var normalizedBaseDomain = NormalizeBaseDomain(config.BaseDomain); // https://domain
+            var hostOnly = GetHost(normalizedBaseDomain);                      // domain
 
             if (nodes != null)
             {
@@ -62,7 +65,12 @@ namespace TouristApp.Services
                             DepartureDates = GetMultipleTexts(node, config.DepartureDate),
                             Duration = GetText(node, config.TourDuration),
                             TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
+                            SourceSite = hostOnly
                         };
+
+                        if (string.IsNullOrWhiteSpace(tour.TourCode))
+                            tour.TourCode = MakeSafeCode(tour.TourName, tour.TourDetailUrl);
+                        tour.Duration = TrimDuration(tour.Duration);
 
                         tours.Add(tour);
                     }
@@ -73,15 +81,11 @@ namespace TouristApp.Services
                 }
             }
 
-            // ✅ Crawl chi tiết bằng Selenium
             foreach (var tour in tours)
             {
                 if (!string.IsNullOrEmpty(tour.TourDetailUrl))
                 {
-                    var fullUrl = tour.TourDetailUrl.StartsWith("http")
-                        ? tour.TourDetailUrl
-                        : $"{config.BaseDomain.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
-
+                    var fullUrl = BuildAbsoluteUrl(normalizedBaseDomain, tour.TourDetailUrl);
                     await CrawlDetailWithSeleniumAsync(tour, fullUrl, config);
                 }
             }
@@ -91,44 +95,23 @@ namespace TouristApp.Services
 
         private async Task HandleDynamicPaging(ChromeDriver driver, string pagingType)
         {
-            int maxLoad = 10;
-            int loadCount = 0;
-
+            int maxLoad = 10, loadCount = 0;
             while (loadCount < maxLoad)
             {
                 try
                 {
-                    // Scroll xuống cuối trang để load nội dung nếu có lazy load
                     ((IJavaScriptExecutor)driver).ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
-                    await Task.Delay(2000); // đợi JS tải xong
+                    await Task.Delay(2000);
 
                     if (pagingType == "load_more")
                     {
-                        // Tìm nút "Xem thêm" hoặc "Load more"
-                        var loadMoreButton = driver.FindElements(By.XPath("//button[contains(text(),'Xem thêm') or contains(text(),'Load more') or contains(text(),'Tải thêm')]")).FirstOrDefault();
-                        if (loadMoreButton != null && loadMoreButton.Displayed)
-                        {
-                            loadMoreButton.Click();
-                            await Task.Delay(2000);
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        var btn = driver.FindElements(By.XPath("//button[contains(text(),'Xem thêm') or contains(text(),'Load more') or contains(text(),'Tải thêm')]")).FirstOrDefault();
+                        if (btn != null && btn.Displayed) { btn.Click(); await Task.Delay(2000); } else break;
                     }
-                    else if (pagingType == "carousel")
+                    else
                     {
-                        // Xử lý carousel/slider
-                        var nextButton = driver.FindElements(By.XPath("//button[contains(@class,'next') or contains(@class,'arrow-right')]")).FirstOrDefault();
-                        if (nextButton != null && nextButton.Displayed)
-                        {
-                            nextButton.Click();
-                            await Task.Delay(2000);
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        var next = driver.FindElements(By.XPath("//button[contains(@class,'next') or contains(@class,'arrow-right')]")).FirstOrDefault();
+                        if (next != null && next.Displayed) { next.Click(); await Task.Delay(2000); } else break;
                     }
 
                     loadCount++;
@@ -161,7 +144,7 @@ namespace TouristApp.Services
             {
                 using var driver = new ChromeDriver(options);
                 driver.Navigate().GoToUrl(url);
-                await Task.Delay(2000); // đợi render JS
+                await Task.Delay(2000);
 
                 var html = driver.PageSource;
                 var doc = new HtmlDocument();
@@ -177,7 +160,6 @@ namespace TouristApp.Services
 
         private void ParseTourDetailFromHtml(HtmlDocument doc, StandardTourModel tour, PageConfigModel config)
         {
-            // 📅 Lịch trình
             var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
             var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
 
@@ -195,7 +177,6 @@ namespace TouristApp.Services
 
             var noteRoots = doc.DocumentNode.SelectNodes(config.TourDetailNote);
 
-            // Nếu là một đoạn block duy nhất
             if (noteRoots == null || noteRoots.Count == 0)
             {
                 var noteRoot = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
@@ -210,17 +191,13 @@ namespace TouristApp.Services
                         {
                             currentHeading = HtmlEntity.DeEntitize(child.InnerText.Trim());
                             if (!tour.ImportantNotes.ContainsKey(currentHeading))
-                            {
                                 tour.ImportantNotes[currentHeading] = "";
-                            }
                         }
                         else if (!string.IsNullOrEmpty(currentHeading))
                         {
                             string content = HtmlEntity.DeEntitize(child.InnerText.Trim());
                             if (!string.IsNullOrWhiteSpace(content))
-                            {
                                 tour.ImportantNotes[currentHeading] += content + "\n";
-                            }
                         }
                     }
 
@@ -228,7 +205,6 @@ namespace TouristApp.Services
                         tour.ImportantNotes[key] = tour.ImportantNotes[key].Trim();
                 }
             }
-            // Nếu là nhiều block khác nhau
             else
             {
                 foreach (var noteRoot in noteRoots)
@@ -282,5 +258,74 @@ namespace TouristApp.Services
 
             return null;
         }
+
+        // ===== helpers =====
+        private static string NormalizeBaseDomain(string baseDomain)
+        {
+            var s = (baseDomain ?? "").Trim();
+            if (string.IsNullOrEmpty(s)) return "";
+            if (!s.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                s = "https://" + s;
+            return s.TrimEnd('/');
+        }
+
+        private static string GetHost(string normalizedBaseDomain)
+        {
+            if (Uri.TryCreate(normalizedBaseDomain, UriKind.Absolute, out var u) && !string.IsNullOrEmpty(u.Host))
+                return u.Host.ToLowerInvariant();
+            return normalizedBaseDomain
+                .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
+                .Trim('/')
+                .ToLowerInvariant();
+        }
+
+        private static string BuildAbsoluteUrl(string normalizedBaseDomain, string maybeRelative)
+        {
+            if (string.IsNullOrWhiteSpace(maybeRelative)) return normalizedBaseDomain;
+            if (Uri.TryCreate(maybeRelative, UriKind.Absolute, out var abs)) return abs.ToString();
+            return $"{normalizedBaseDomain.TrimEnd('/')}/{maybeRelative.TrimStart('/')}";
+        }
+
+        private static string ToAscii(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "";
+            var t = HtmlEntity.DeEntitize(s);
+            var norm = t.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder();
+            foreach (var ch in norm)
+                if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+                    sb.Append(ch);
+            return sb.ToString().Normalize(NormalizationForm.FormC);
+        }
+
+        private static string MakeSafeCode(string? name, string? url)
+        {
+            string raw = "";
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                try
+                {
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var u))
+                        raw = u.Segments.Last().Trim('/');
+                    else
+                        raw = url.Split('/').Last();
+                }
+                catch { }
+            }
+            if (string.IsNullOrWhiteSpace(raw)) raw = name ?? "";
+
+            raw = ToAscii(raw).ToUpperInvariant();
+            raw = Regex.Replace(raw, @"[^A-Z0-9]+", "");
+            if (string.IsNullOrWhiteSpace(raw)) raw = "TOUR" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+            return raw.Length > 80 ? raw[..80] : raw;
+        }
+
+        private static string TrimDuration(string? s)
+        {
+            s = (s ?? "").Trim();
+            return s.Length > 250 ? s[..250] : s;
+        }
     }
-} 
+}

@@ -2,8 +2,6 @@
 using HtmlAgilityPack;
 using Microsoft.AspNetCore.Mvc;
 using MySql.Data.MySqlClient;
-using Newtonsoft.Json.Linq;
-using System.Data;
 using System.Text.RegularExpressions;
 using TouristApp.Models;
 using TouristApp.Services;
@@ -12,30 +10,17 @@ namespace TouristApp.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class DeVietTourController : ControllerBase
+    public class GenericTourController : ControllerBase
     {
         private readonly DeVietTourCrawler _crawler;
         private readonly DeVietTourDataInserter _inserter;
         private readonly string _connectionString = "server=localhost;database=code_camp_2025;user=root;password=;";
 
-        public DeVietTourController()
+        public GenericTourController()
         {
             _crawler = new DeVietTourCrawler();
             _inserter = new DeVietTourDataInserter(_connectionString);
         }
-
-        //string GetCleanText(HtmlNode node, string selector)
-        //{
-        //    var text = node.QuerySelector(selector)?.InnerText ?? "";
-        //    return Regex.Replace(text, @"\s+", " ").Trim();
-        //}
-
-        //string GetAttr(HtmlNode node, string selector, string attr)
-        //{
-        //    return string.IsNullOrWhiteSpace(selector)
-        //        ? ""
-        //        : node.QuerySelector(selector)?.GetAttributeValue(attr, "") ?? "";
-        //}
 
         [HttpGet("crawl")]
         public async Task<IActionResult> CrawlTours()
@@ -85,8 +70,9 @@ namespace TouristApp.Controllers
             });
         }
 
+        // THÊM FILTER theo site và trả sourceSite
         [HttpGet("tours")]
-        public IActionResult GetTours()
+        public IActionResult GetTours([FromQuery] string? site)
         {
             var tours = new List<object>();
 
@@ -94,29 +80,70 @@ namespace TouristApp.Controllers
             {
                 connection.Open();
                 var query = "SELECT * FROM tours";
+                if (!string.IsNullOrWhiteSpace(site))
+                    query += " WHERE source_site = @Site";
+
                 using (var command = new MySqlCommand(query, connection))
-                using (var reader = command.ExecuteReader())
                 {
-                    while (reader.Read())
+                    if (!string.IsNullOrWhiteSpace(site))
+                        command.Parameters.AddWithValue("@Site", site);
+
+                    using (var reader = command.ExecuteReader())
                     {
-                        tours.Add(new
+                        while (reader.Read())
                         {
-                            TourId = reader["id"],
-                            TourName = reader["tour_name"],
-                            TourCode = reader["tour_code"],
-                            Price = reader["price"],
-                            ImageUrl = reader["image_url"],
-                            DepartureLocation = reader["departure_location"],
-                            Duration = reader["duration"],
-                            TourDetailUrl = reader["tour_detail_url"],
-                            DepartureDates = reader["departure_dates"],
-                            ImportantNotes = reader["important_notes"]
-                        });
+                            tours.Add(new
+                            {
+                                TourId = reader["id"],
+                                TourName = reader["tour_name"],
+                                TourCode = reader["tour_code"],
+                                Price = reader["price"],
+                                ImageUrl = reader["image_url"],
+                                DepartureLocation = reader["departure_location"],
+                                Duration = reader["duration"],
+                                TourDetailUrl = reader["tour_detail_url"],
+                                DepartureDates = reader["departure_dates"],
+                                ImportantNotes = reader["important_notes"],
+                                SourceSite = reader["source_site"]
+                            });
+                        }
                     }
                 }
             }
 
             return Ok(tours);
+        }
+
+        [HttpGet("tours/{id}")]
+        public IActionResult GetTourById(int id)
+        {
+            using var connection = new MySqlConnection(_connectionString);
+            connection.Open();
+
+            var query = "SELECT * FROM tours WHERE id = @Id LIMIT 1";
+            using var command = new MySqlCommand(query, connection);
+            command.Parameters.AddWithValue("@Id", id);
+
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return NotFound(new { Message = "Không tìm thấy tour" });
+
+            var tour = new
+            {
+                TourId = reader["id"],
+                TourName = reader["tour_name"]?.ToString(),
+                TourCode = reader["tour_code"]?.ToString(),
+                Price = reader["price"]?.ToString(),
+                ImageUrl = reader["image_url"]?.ToString(),
+                DepartureLocation = reader["departure_location"]?.ToString(),
+                Duration = reader["duration"]?.ToString(),
+                TourDetailUrl = reader["tour_detail_url"]?.ToString(),
+                DepartureDates = reader["departure_dates"]?.ToString(),
+                ImportantNotes = reader["important_notes"]?.ToString(),
+                SourceSite = reader["source_site"]?.ToString()
+            };
+
+            return Ok(tour);
         }
 
         [HttpGet("schedules/{tourId}")]
@@ -175,7 +202,7 @@ namespace TouristApp.Controllers
             command.Parameters.AddWithValue("@Price", tour.Price);
             command.Parameters.AddWithValue("@ImageUrl", tour.ImageUrl ?? "");
             command.Parameters.AddWithValue("@DepartureLocation", tour.DepartureLocation);
-            command.Parameters.AddWithValue("@Duration", tour.Duration);
+            command.Parameters.AddWithValue("@Duration", (tour.Duration ?? "").Length > 255 ? (tour.Duration ?? "").Substring(0, 255) : (tour.Duration ?? ""));
             command.Parameters.AddWithValue("@TourDetailUrl", tour.TourDetailUrl ?? "");
 
             var departureDatesText = string.Join(",", tour.DepartureDates ?? new List<string>());
@@ -235,6 +262,5 @@ namespace TouristApp.Controllers
                 return StatusCode(500, new { Message = "Lỗi khi xóa", Error = ex.Message });
             }
         }
-
     }
 }
