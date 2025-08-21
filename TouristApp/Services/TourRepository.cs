@@ -21,7 +21,6 @@ namespace TouristApp.Services
             using var conn = new MySqlConnection(_connectionString);
             conn.Open();
 
-            // ✅ Cấu hình JSON để giữ nguyên ký tự UTF-8 (tiếng Việt)
             var jsonOptions = new JsonSerializerOptions
             {
                 Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
@@ -31,47 +30,82 @@ namespace TouristApp.Services
             {
                 try
                 {
-                    var insertCmd = new MySqlCommand(@"
-                        INSERT INTO tours (
-                            tour_name, tour_code, price, image_url,
-                            departure_location, duration, tour_detail_url,
-                            departure_dates, important_notes
-                        )
-                        VALUES (
-                            @tour_name, @tour_code, @price, @image_url,
-                            @departure_location, @duration, @tour_detail_url,
-                            @departure_dates, @important_notes
-                        );
-                        SELECT LAST_INSERT_ID();", conn);
+                    var tourCode = string.IsNullOrWhiteSpace(tour.TourCode)
+                        ? "TOUR" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()
+                        : tour.TourCode.Trim();
 
-                    insertCmd.Parameters.AddWithValue("@tour_name", tour.TourName ?? "");
-                    insertCmd.Parameters.AddWithValue("@tour_code", tour.TourCode ?? "");
-                    insertCmd.Parameters.AddWithValue("@price", tour.Price ?? "");
-                    insertCmd.Parameters.AddWithValue("@image_url", tour.ImageUrl ?? "");
-                    insertCmd.Parameters.AddWithValue("@departure_location", tour.DepartureLocation ?? "");
-                    insertCmd.Parameters.AddWithValue("@duration", tour.Duration ?? "");
-                    insertCmd.Parameters.AddWithValue("@tour_detail_url", tour.TourDetailUrl ?? "");
+                    var sourceSite = (tour.SourceSite ?? "").Trim();
+                    var duration = (tour.Duration ?? "");
+                    if (duration.Length > 255) duration = duration[..255];
 
-                    // ✅ Serialize với UTF-8
-                    insertCmd.Parameters.AddWithValue("@departure_dates", JsonSerializer.Serialize(tour.DepartureDates, jsonOptions));
-                    insertCmd.Parameters.AddWithValue("@important_notes", JsonSerializer.Serialize(tour.ImportantNotes, jsonOptions));
+                    var upsertSql = @"
+INSERT INTO tours (
+  tour_name, tour_code, price, image_url,
+  departure_location, duration, tour_detail_url,
+  departure_dates, important_notes, source_site
+) VALUES (
+  @tour_name, @tour_code, @price, @image_url,
+  @departure_location, @duration, @tour_detail_url,
+  @departure_dates, @important_notes, @source_site
+)
+ON DUPLICATE KEY UPDATE
+  tour_name = VALUES(tour_name),
+  price = VALUES(price),
+  image_url = VALUES(image_url),
+  departure_location = VALUES(departure_location),
+  duration = VALUES(duration),
+  tour_detail_url = VALUES(tour_detail_url),
+  departure_dates = VALUES(departure_dates),
+  important_notes = VALUES(important_notes);";
 
-                    int tourId = Convert.ToInt32(insertCmd.ExecuteScalar());
-                    savedCount++;
-
-                    // ✅ Insert lịch trình
-                    foreach (var schedule in tour.Schedule)
+                    using (var cmd = new MySqlCommand(upsertSql, conn))
                     {
-                        var scheduleCmd = new MySqlCommand(@"
+                        cmd.Parameters.AddWithValue("@tour_name", tour.TourName ?? "");
+                        cmd.Parameters.AddWithValue("@tour_code", tourCode);
+                        cmd.Parameters.AddWithValue("@price", tour.Price ?? "");
+                        cmd.Parameters.AddWithValue("@image_url", tour.ImageUrl ?? "");
+                        cmd.Parameters.AddWithValue("@departure_location", tour.DepartureLocation ?? "");
+                        cmd.Parameters.AddWithValue("@duration", duration);
+                        cmd.Parameters.AddWithValue("@tour_detail_url", tour.TourDetailUrl ?? "");
+                        cmd.Parameters.AddWithValue("@departure_dates",
+                            JsonSerializer.Serialize(tour.DepartureDates ?? new List<string>(), jsonOptions));
+                        cmd.Parameters.AddWithValue("@important_notes",
+                            JsonSerializer.Serialize(tour.ImportantNotes ?? new Dictionary<string, string>(), jsonOptions));
+                        cmd.Parameters.AddWithValue("@source_site", sourceSite);
+
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // Lấy id theo (site, code)
+                    int tourId;
+                    using (var find = new MySqlCommand(
+                        "SELECT id FROM tours WHERE source_site=@site AND tour_code=@code LIMIT 1", conn))
+                    {
+                        find.Parameters.AddWithValue("@site", sourceSite);
+                        find.Parameters.AddWithValue("@code", tourCode);
+                        tourId = Convert.ToInt32(find.ExecuteScalar());
+                    }
+
+                    // Làm mới schedules
+                    using (var del = new MySqlCommand("DELETE FROM schedules WHERE tour_id=@id", conn))
+                    {
+                        del.Parameters.AddWithValue("@id", tourId);
+                        del.ExecuteNonQuery();
+                    }
+
+                    foreach (var schedule in tour.Schedule ?? new List<TourScheduleItem>())
+                    {
+                        using var scheduleCmd = new MySqlCommand(@"
                             INSERT INTO schedules (tour_id, day_title, day_content)
                             VALUES (@tour_id, @day_title, @day_content);", conn);
 
                         scheduleCmd.Parameters.AddWithValue("@tour_id", tourId);
                         scheduleCmd.Parameters.AddWithValue("@day_title", schedule.DayTitle ?? "");
                         scheduleCmd.Parameters.AddWithValue("@day_content", schedule.DayContent ?? "");
-
                         scheduleCmd.ExecuteNonQuery();
                     }
+
+                    savedCount++;
                 }
                 catch (Exception ex)
                 {

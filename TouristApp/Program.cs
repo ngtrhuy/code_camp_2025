@@ -42,7 +42,7 @@ namespace TouristApp
             app.UseCors("AllowAll");
             app.UseAuthorization();
 
-
+            app.UseStaticFiles();
             app.MapControllers();
 
             app.Run();
