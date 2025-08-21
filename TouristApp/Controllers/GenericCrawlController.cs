@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using System.Net.Http.Headers;
 using TouristApp.Models;
 using TouristApp.Services;
+using System.Net.Http.Headers;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace TouristApp.Controllers
 {
@@ -14,8 +16,10 @@ namespace TouristApp.Controllers
         private readonly TourRepository _tourRepository;
         private readonly IHistoryRepository _history;
 
-        // folder lưu ảnh tĩnh
+        // folders
         private readonly string _imageFolder;
+        private readonly string _previewFolder;
+
         private static readonly HttpClient _http = new HttpClient();
 
         public GenericCrawlController(IConfiguration configuration, IHistoryRepository history)
@@ -29,60 +33,146 @@ namespace TouristApp.Controllers
             if (!Directory.Exists(_imageFolder))
                 Directory.CreateDirectory(_imageFolder);
 
-            // user-agent để tải ảnh từ 1 số site khó tính
+            _previewFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "previews");
+            if (!Directory.Exists(_previewFolder))
+                Directory.CreateDirectory(_previewFolder);
+
             if (!_http.DefaultRequestHeaders.UserAgent.Any())
                 _http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
         }
-        /*
-                // ✅ Crawl và lưu DB (không dùng history) — giữ nguyên
-                [HttpGet("crawl-and-save/{id}")]
-                public IActionResult CrawlAndSave(int id, [FromQuery] int limit)
+        // ================== Generic crawl sync quick ==================
+        [HttpGet("{configId}")]
+        public async Task<IActionResult> Crawl(int configId)
+        {
+            try
+            {
+                var tempService = new GenericCrawlServiceServerSide(); // chỉ để load config
+                var config = await tempService.LoadPageConfig(configId);
+                if (config == null) return NotFound("Không tìm thấy cấu hình crawl.");
+
+                var crawlService = CrawlServiceFactory.CreateCrawlService(config);
+                var data = await crawlService.CrawlFromPageConfigAsync(configId);
+
+                if (data.Count == 0) return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
+
+                await RewriteImagesToLocal(data, config.BaseDomain);
+
+                return Ok(new
                 {
-                    if (limit <= 0) return BadRequest("limit phải > 0");
+                    message = $"Crawl thành công {data.Count} tour từ {config.BaseDomain}",
+                    crawl_type = config.CrawlType,
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = $"Lỗi crawl: {ex.Message}" });
+            }
+        }
 
-                    var config = GetConfigById(id);
-                    if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+        // ================== Crawl nền có HISTORY: CHỈ LƯU PREVIEW ==================
+        [HttpGet("server-side/{configId}")]
+        public async Task<IActionResult> CrawlServerSide(int configId)
+        {
+            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
 
-                    // Đã sửa ở đây
-                    var service = new SeleniumCrawlService(_tourRepository);
-                    var tours = service.CrawlToursWithSelenium(config, limit);
-                    int savedCount = _tourRepository.SaveTours(tours);
-
-                    return Ok(new
-                    {
-                        message = "✅ Đã crawl và lưu vào DB",
-                        requested = limit,
-                        totalCrawled = tours.Count,
-                        totalSaved = savedCount
-                    });
-                }
-
-
-                // ✅ Crawl không lưu DB, cho phép nhập số lượng tour qua ?limit=
-                // GET /api/crawl/crawl-only/1?limit=10
-                [HttpGet("crawl-only/{id}")]
-                public IActionResult GetToursOnly(int id, [FromQuery] int limit)
+            _ = Task.Run(async () =>
+            {
+                try
                 {
-                    if (limit <= 0) return BadRequest("limit phải > 0");
+                    var service = new GenericCrawlServiceServerSide();
+                    var data = await service.CrawlFromPageConfigAsync(configId);
 
-                    var config = GetConfigById(id);
-                    if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
+                    var cfg = await service.LoadPageConfig(configId);
+                    var baseDomain = cfg?.BaseDomain ?? "";
+                    await RewriteImagesToLocal(data, baseDomain);
 
-                    // Đã sửa ở đây
-                    var service = new SeleniumCrawlService(_tourRepository);
-                    var tours = service.CrawlToursWithSelenium(config, limit);
+                    // ❗ lưu preview – chưa ghi DB
+                    await SavePreviewAsync(historyId, data);
 
-                    return Ok(new
-                    {
-                        message = "✅ Đã crawl dữ liệu thành công",
-                        requested = limit,
-                        totalCrawled = tours.Count,
-                        tours
-                    });
+                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
                 }
-        */
+                catch (Exception ex)
+                {
+                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
+                }
+            });
 
-        // ✅ Load config từ DB — giữ nguyên
+            return Ok(new { message = "Crawl started", historyId });
+        }
+
+        [HttpGet("client-side/{configId}")]
+        public async Task<IActionResult> CrawlClientSide(int configId, [FromQuery] int limit = 20)
+        {
+            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var service = new GenericCrawlServiceClientSide();
+                    var data = await service.CrawlFromPageConfigAsync(configId, limit);
+
+                    // tải ảnh về máy + thay URL
+                    var cfg = await service.LoadPageConfig(configId);
+                    var baseDomain = cfg?.BaseDomain ?? "";
+                    await RewriteImagesToLocal(data, baseDomain);
+
+                    // ❗ lưu preview – chưa ghi DB
+                    await SavePreviewAsync(historyId, data);
+
+                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
+                }
+                catch (Exception ex)
+                {
+                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
+                }
+            });
+
+            return Ok(new { message = "Crawl started", historyId });
+        }
+
+        // ================== PREVIEW APIs ==================
+        // Trả preview theo snake_case fields như yêu cầu
+        [HttpGet("preview/{historyId:long}")]
+        public IActionResult GetPreview(long historyId)
+        {
+            var data = LoadPreview(historyId);
+            var mapped = data.Select((t, idx) => new Dictionary<string, object?>
+            {
+                ["id"] = idx + 1, // preview chưa có id DB, dùng index
+                ["tour_name"] = t.TourName,
+                ["tour_code"] = t.TourCode,
+                ["price"] = t.Price,
+                ["image_url"] = t.ImageUrl,
+                ["departure_location"] = t.DepartureLocation,
+                ["duration"] = t.Duration,
+                ["tour_detail_url"] = t.TourDetailUrl,
+                ["departure_dates"] = t.DepartureDates,   // list<string>
+                ["important_notes"] = t.ImportantNotes,   // dict<string,string>
+                ["source_site"] = t.SourceSite
+            }).ToList();
+
+            return Ok(new { total = mapped.Count, tours = mapped });
+        }
+
+        // Nhập DB từ preview
+        [HttpPost("import/{historyId:long}")]
+        public IActionResult ImportFromPreview(long historyId)
+        {
+            var data = LoadPreview(historyId);
+            if (data.Count == 0) return NotFound(new { message = "Không có dữ liệu preview để import." });
+
+            var saved = _tourRepository.SaveTours(data);
+
+            // Xoá file preview sau khi import (tùy bạn)
+            var path = Path.Combine(_previewFolder, $"{historyId}.json");
+            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+
+            return Ok(new { message = "Đã import vào DB", total = data.Count, saved });
+        }
+
+        // ================== Load Config từ DB ==================
         private PageConfigModel? GetConfigById(int id)
         {
             PageConfigModel? config = null;
@@ -124,98 +214,25 @@ namespace TouristApp.Controllers
             return config;
         }
 
-        // ✅ Generic crawl (sync) — thêm bước rewrite ảnh trước khi trả
-        [HttpGet("{configId}")]
-        public async Task<IActionResult> Crawl(int configId)
+        // ================== Helpers: Preview ==================
+        private async Task SavePreviewAsync(long historyId, List<StandardTourModel> tours)
         {
-            try
+            var jsonOptions = new JsonSerializerOptions
             {
-                var tempService = new GenericCrawlServiceServerSide(); // chỉ để load config
-                var config = await tempService.LoadPageConfig(configId);
-                if (config == null) return NotFound("Không tìm thấy cấu hình crawl.");
-
-                var crawlService = CrawlServiceFactory.CreateCrawlService(config);
-                var data = await crawlService.CrawlFromPageConfigAsync(configId);
-
-                if (data.Count == 0) return NotFound("Không tìm thấy hoặc không crawl được dữ liệu.");
-
-                await RewriteImagesToLocal(data, config.BaseDomain);
-
-                return Ok(new
-                {
-                    message = $"Crawl thành công {data.Count} tour từ {config.BaseDomain}",
-                    crawl_type = config.CrawlType,
-                    data
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { error = $"Lỗi crawl: {ex.Message}" });
-            }
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                WriteIndented = false
+            };
+            var path = Path.Combine(_previewFolder, $"{historyId}.json");
+            using var fs = System.IO.File.Create(path);
+            await JsonSerializer.SerializeAsync(fs, tours, jsonOptions);
         }
 
-        // ✅ Crawl server-side có HISTORY — thêm bước lưu ảnh + (tuỳ chọn) lưu DB
-        [HttpGet("server-side/{configId}")]
-        public async Task<IActionResult> CrawlServerSide(int configId)
+        private List<StandardTourModel> LoadPreview(long historyId)
         {
-            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var service = new GenericCrawlServiceServerSide();
-                    var data = await service.CrawlFromPageConfigAsync(configId);
-
-                    // tải ảnh về máy + thay URL
-                    var cfg = await service.LoadPageConfig(configId);
-                    var baseDomain = cfg?.BaseDomain ?? "";
-                    await RewriteImagesToLocal(data, baseDomain);
-
-                    // (tuỳ chọn) lưu DB — nếu bạn muốn gắn vào pipeline crawl
-                    _tourRepository.SaveTours(data);
-
-                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
-                }
-                catch (Exception ex)
-                {
-                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
-                }
-            });
-
-            return Ok(new { message = "Crawl started", historyId });
-        }
-
-
-        [HttpGet("client-side/{configId}")]
-        public async Task<IActionResult> CrawlClientSide(int configId, [FromQuery] int limit = 20)
-        {
-            var historyId = await _history.CreateAsync(configId, "pending", "Starting crawl...");
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var service = new GenericCrawlServiceClientSide();
-                    var data = await service.CrawlFromPageConfigAsync(configId, limit);
-
-                    // tải ảnh về máy + thay URL
-                    var cfg = await service.LoadPageConfig(configId);
-                    var baseDomain = cfg?.BaseDomain ?? "";
-                    await RewriteImagesToLocal(data, baseDomain);
-
-                    // (tuỳ chọn) lưu DB
-                    _tourRepository.SaveTours(data);
-
-                    await _history.UpdateAsync(historyId, "done", $"Crawled {data.Count} tours successfully.");
-                }
-                catch (Exception ex)
-                {
-                    await _history.UpdateAsync(historyId, "failed", ex.ToString());
-                }
-            });
-
-            return Ok(new { message = "Crawl started", historyId });
+            var path = Path.Combine(_previewFolder, $"{historyId}.json");
+            if (!System.IO.File.Exists(path)) return new List<StandardTourModel>();
+            var json = System.IO.File.ReadAllText(path);
+            return JsonSerializer.Deserialize<List<StandardTourModel>>(json) ?? new List<StandardTourModel>();
         }
 
         // ================== Helpers: tải ảnh & ghi đè URL ==================
@@ -228,7 +245,7 @@ namespace TouristApp.Controllers
                     if (string.IsNullOrWhiteSpace(t.ImageUrl)) continue;
 
                     var absolute = ToAbsoluteUrl(baseDomain, t.ImageUrl);
-                    var localUrl = await SaveImageAsync(absolute); // => "/images/<file>"
+                    var localUrl = await SaveImageAsync(absolute);
                     if (!string.IsNullOrEmpty(localUrl))
                         t.ImageUrl = localUrl;
                 }
@@ -260,7 +277,6 @@ namespace TouristApp.Controllers
                 var full = Path.Combine(_imageFolder, file);
                 await System.IO.File.WriteAllBytesAsync(full, bytes);
 
-                // trả về URL tĩnh để FE dùng
                 return $"/images/{file}";
             }
             catch
@@ -271,7 +287,6 @@ namespace TouristApp.Controllers
 
         private static string GetExtension(string url, HttpContentHeaders headers)
         {
-            // thử từ URL
             try
             {
                 var path = new Uri(url).AbsolutePath;
@@ -280,7 +295,6 @@ namespace TouristApp.Controllers
             }
             catch { /* ignore */ }
 
-            // thử từ content-type
             var ct = headers.ContentType?.MediaType?.ToLowerInvariant() ?? "";
             if (ct.Contains("png")) return ".png";
             if (ct.Contains("webp")) return ".webp";
