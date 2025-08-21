@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿// Controllers/ConfigController.cs
+using Microsoft.AspNetCore.Mvc;
 using MySql.Data.MySqlClient;
 using TouristApp.Models;
 
@@ -17,188 +18,188 @@ namespace TouristApp.Controllers
             _connectionString = _configuration.GetConnectionString("DefaultConnection");
         }
 
-        // GET: api/config/pageconfigs
+        // nhỏ gọn: helper set DBNull cho null/empty
+        private static void AddParam(MySqlCommand cmd, string name, object? value)
+        {
+            cmd.Parameters.AddWithValue(name, value is null ? DBNull.Value :
+                                              value is string s && string.IsNullOrWhiteSpace(s) ? DBNull.Value :
+                                              value);
+        }
+
         [HttpGet("pageconfigs")]
         public IActionResult GetPageConfigs([FromQuery] string? crawlType)
         {
             var configs = new List<object>();
+            using var connection = new MySqlConnection(_connectionString);
+            connection.Open();
 
-            using (var connection = new MySqlConnection(_connectionString))
+            var sql = "SELECT * FROM page_config";
+            if (!string.IsNullOrWhiteSpace(crawlType)) sql += " WHERE crawl_type = @CrawlType";
+
+            using var cmd = new MySqlCommand(sql, connection);
+            if (!string.IsNullOrWhiteSpace(crawlType)) AddParam(cmd, "@CrawlType", crawlType);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                connection.Open();
-
-                string query = "SELECT * FROM page_config";
-                if (!string.IsNullOrEmpty(crawlType))
+                configs.Add(new
                 {
-                    query += " WHERE crawl_type = @CrawlType";
-                }
-
-                using (var command = new MySqlCommand(query, connection))
-                {
-                    if (!string.IsNullOrEmpty(crawlType))
-                    {
-                        command.Parameters.AddWithValue("@CrawlType", crawlType);
-                    }
-
-                    using (var reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            configs.Add(new
-                            {
-                                Id = reader["id"],
-                                BaseDomain = reader["base_domain"],
-                                BaseUrl = reader["base_url"],
-                                TourListSelector = reader["tour_list_selector"],
-                                TourName = reader["tour_name"],
-                                TourCode = reader["tour_code"],
-                                TourPrice = reader["tour_price"],
-                                ImageUrl = reader["image_url"],
-                                DepartureLocation = reader["departure_location"],
-                                DepartureDate = reader["departure_date"],
-                                TourDuration = reader["tour_duration"],
-                                TourDetailUrl = reader["tour_detail_url"],
-                                TourDetailDayTitle = reader["tour_detail_day_title"],
-                                TourDetailDayContent = reader["tour_detail_day_content"],
-                                TourDetailNote = reader["tour_detail_note"],
-                                CrawlType = reader["crawl_type"],
-                                LoadMoreButtonSelector = reader["load_more_button_selector"],
-
-                                LoadMoreType = reader["load_more_type"],
-                                /*LoadMoreButtonIndex = reader["load_more_button_index"],*/
-                                PagingType = reader["paging_type"]
-                            });
-                        }
-                    }
-                }
+                    Id = reader["id"],
+                    BaseDomain = reader["base_domain"],
+                    BaseUrl = reader["base_url"],
+                    TourListSelector = reader["tour_list_selector"],
+                    TourName = reader["tour_name"],
+                    TourCode = reader["tour_code"],
+                    TourPrice = reader["tour_price"],
+                    ImageUrl = reader["image_url"],
+                    DepartureLocation = reader["departure_location"],
+                    DepartureDate = reader["departure_date"],
+                    TourDuration = reader["tour_duration"],
+                    TourDetailUrl = reader["tour_detail_url"],
+                    TourDetailDayTitle = reader["tour_detail_day_title"],
+                    TourDetailDayContent = reader["tour_detail_day_content"],
+                    TourDetailNote = reader["tour_detail_note"],
+                    CrawlType = reader["crawl_type"],
+                    ImageAttr = reader["image_attr"],
+                    TourDetailAttr = reader["tour_detail_attr"],
+                    LoadMoreButtonSelector = reader["load_more_button_selector"],
+                    LoadMoreType = reader["load_more_type"],
+                    PagingType = reader["paging_type"],
+                });
             }
 
             return Ok(configs);
         }
 
-        // POST: api/config/pageconfigs
         [HttpPost("pageconfigs")]
         public IActionResult CreatePageConfig([FromBody] PageConfigModel config)
         {
-            using var connection = new MySqlConnection(_connectionString);
-            connection.Open();
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                connection.Open();
 
-            var query = @"
-               INSERT INTO page_config (
-    base_domain, base_url, tour_list_selector, tour_name, tour_code, tour_price, image_url,
-    departure_location, departure_date, tour_duration, tour_detail_url,
-    tour_detail_day_title, tour_detail_day_content, tour_detail_note, crawl_type,
-    image_attr, tour_detail_attr, load_more_button_selector, load_more_type, paging_type
-)
-VALUES (
-    @BaseDomain, @BaseUrl, @TourListSelector, @TourName, @TourCode, @TourPrice, @ImageUrl,
-    @DepartureLocation, @DepartureDate, @TourDuration, @TourDetailUrl,
-    @TourDetailDayTitle, @TourDetailDayContent, @TourDetailNote, @CrawlType,
-    @ImageAttr, @TourDetailAttr, @LoadMoreButtonSelector, @LoadMoreType, @PagingType
+                const string sql = @"
+INSERT INTO page_config (
+  base_domain, base_url, tour_list_selector, tour_name, tour_code, tour_price, image_url,
+  departure_location, departure_date, tour_duration, tour_detail_url,
+  tour_detail_day_title, tour_detail_day_content, tour_detail_note, crawl_type,
+  image_attr, tour_detail_attr, load_more_button_selector, load_more_type, paging_type
+) VALUES (
+  @BaseDomain, @BaseUrl, @TourListSelector, @TourName, @TourCode, @TourPrice, @ImageUrl,
+  @DepartureLocation, @DepartureDate, @TourDuration, @TourDetailUrl,
+  @TourDetailDayTitle, @TourDetailDayContent, @TourDetailNote, @CrawlType,
+  @ImageAttr, @TourDetailAttr, @LoadMoreButtonSelector, @LoadMoreType, @PagingType
 );";
 
-            using var command = new MySqlCommand(query, connection);
+                using var cmd = new MySqlCommand(sql, connection);
+                AddParam(cmd, "@BaseDomain", config.BaseDomain);
+                AddParam(cmd, "@BaseUrl", config.BaseUrl);
+                AddParam(cmd, "@TourListSelector", config.TourListSelector);
+                AddParam(cmd, "@TourName", config.TourName);
+                AddParam(cmd, "@TourCode", config.TourCode);
+                AddParam(cmd, "@TourPrice", config.TourPrice);
+                AddParam(cmd, "@ImageUrl", config.ImageUrl);
+                AddParam(cmd, "@DepartureLocation", config.DepartureLocation);
+                AddParam(cmd, "@DepartureDate", config.DepartureDate);
+                AddParam(cmd, "@TourDuration", config.TourDuration);
+                AddParam(cmd, "@TourDetailUrl", config.TourDetailUrl);
+                AddParam(cmd, "@TourDetailDayTitle", config.TourDetailDayTitle);
+                AddParam(cmd, "@TourDetailDayContent", config.TourDetailDayContent);
+                AddParam(cmd, "@TourDetailNote", config.TourDetailNote);
+                AddParam(cmd, "@CrawlType", config.CrawlType);
+                AddParam(cmd, "@ImageAttr", config.ImageAttr);
+                AddParam(cmd, "@TourDetailAttr", config.TourDetailAttr);
+                AddParam(cmd, "@LoadMoreButtonSelector", config.LoadMoreButtonSelector);
+                AddParam(cmd, "@LoadMoreType", config.LoadMoreType);
+                AddParam(cmd, "@PagingType", config.PagingType);
 
-            command.Parameters.AddWithValue("@BaseDomain", config.BaseDomain);
-            command.Parameters.AddWithValue("@BaseUrl", config.BaseUrl);
-            command.Parameters.AddWithValue("@TourListSelector", config.TourListSelector);
-            command.Parameters.AddWithValue("@TourName", config.TourName);
-            command.Parameters.AddWithValue("@TourCode", config.TourCode);
-            command.Parameters.AddWithValue("@TourPrice", config.TourPrice);
-            command.Parameters.AddWithValue("@ImageUrl", config.ImageUrl);
-            command.Parameters.AddWithValue("@DepartureLocation", config.DepartureLocation);
-            command.Parameters.AddWithValue("@DepartureDate", config.DepartureDate);
-            command.Parameters.AddWithValue("@TourDuration", config.TourDuration);
-            command.Parameters.AddWithValue("@TourDetailUrl", config.TourDetailUrl);
-            command.Parameters.AddWithValue("@TourDetailDayTitle", config.TourDetailDayTitle);
-            command.Parameters.AddWithValue("@TourDetailDayContent", config.TourDetailDayContent);
-            command.Parameters.AddWithValue("@TourDetailNote", config.TourDetailNote);
-            command.Parameters.AddWithValue("@CrawlType", config.CrawlType);
-            command.Parameters.AddWithValue("@ImageAttr", config.ImageAttr);
-            command.Parameters.AddWithValue("@TourDetailAttr", config.TourDetailAttr);
-            command.Parameters.AddWithValue("@LoadMoreButtonSelector", config.LoadMoreButtonSelector);
-            command.Parameters.AddWithValue("@LoadMoreType", config.LoadMoreType);
-            command.Parameters.AddWithValue("@PagingType", config.PagingType);
-
-            command.ExecuteNonQuery();
-
-            return Ok(new { message = "Created successfully" });
+                cmd.ExecuteNonQuery();
+                return Ok(new { message = "Created successfully" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = "Create failed", error = ex.Message });
+            }
         }
 
-        // PUT: api/config/pageconfigs/{id}
         [HttpPut("pageconfigs/{id}")]
         public IActionResult UpdatePageConfig(int id, [FromBody] PageConfigModel config)
         {
-            using var connection = new MySqlConnection(_connectionString);
-            connection.Open();
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                connection.Open();
 
-            var query = @"
-               UPDATE page_config SET
-    base_domain = @BaseDomain,
-    base_url = @BaseUrl,
-    tour_list_selector = @TourListSelector,
-    tour_name = @TourName,
-    tour_code = @TourCode,
-    tour_price = @TourPrice,
-    image_url = @ImageUrl,
-    departure_location = @DepartureLocation,
-    departure_date = @DepartureDate,
-    tour_duration = @TourDuration,
-    tour_detail_url = @TourDetailUrl,
-    tour_detail_day_title = @TourDetailDayTitle,
-    tour_detail_day_content = @TourDetailDayContent,
-    tour_detail_note = @TourDetailNote,
-    crawl_type = @CrawlType,
-    image_attr = @ImageAttr,
-    tour_detail_attr = @TourDetailAttr,
-    load_more_button_selector = @LoadMoreButtonSelector,
-    load_more_type = @LoadMoreType,
-    paging_type = @PagingType
-WHERE id = @Id;
-";
+                const string sql = @"
+UPDATE page_config SET
+  base_domain = @BaseDomain,
+  base_url = @BaseUrl,
+  tour_list_selector = @TourListSelector,
+  tour_name = @TourName,
+  tour_code = @TourCode,
+  tour_price = @TourPrice,
+  image_url = @ImageUrl,
+  departure_location = @DepartureLocation,
+  departure_date = @DepartureDate,
+  tour_duration = @TourDuration,
+  tour_detail_url = @TourDetailUrl,
+  tour_detail_day_title = @TourDetailDayTitle,
+  tour_detail_day_content = @TourDetailDayContent,
+  tour_detail_note = @TourDetailNote,
+  crawl_type = @CrawlType,
+  image_attr = @ImageAttr,
+  tour_detail_attr = @TourDetailAttr,
+  load_more_button_selector = @LoadMoreButtonSelector,
+  load_more_type = @LoadMoreType,
+  paging_type = @PagingType
+WHERE id = @Id;";
 
-            using var command = new MySqlCommand(query, connection);
+                using var cmd = new MySqlCommand(sql, connection);
+                AddParam(cmd, "@Id", id);
+                AddParam(cmd, "@BaseDomain", config.BaseDomain);
+                AddParam(cmd, "@BaseUrl", config.BaseUrl);
+                AddParam(cmd, "@TourListSelector", config.TourListSelector);
+                AddParam(cmd, "@TourName", config.TourName);
+                AddParam(cmd, "@TourCode", config.TourCode);
+                AddParam(cmd, "@TourPrice", config.TourPrice);
+                AddParam(cmd, "@ImageUrl", config.ImageUrl);
+                AddParam(cmd, "@DepartureLocation", config.DepartureLocation);
+                AddParam(cmd, "@DepartureDate", config.DepartureDate);
+                AddParam(cmd, "@TourDuration", config.TourDuration);
+                AddParam(cmd, "@TourDetailUrl", config.TourDetailUrl);
+                AddParam(cmd, "@TourDetailDayTitle", config.TourDetailDayTitle);
+                AddParam(cmd, "@TourDetailDayContent", config.TourDetailDayContent);
+                AddParam(cmd, "@TourDetailNote", config.TourDetailNote);
+                AddParam(cmd, "@CrawlType", config.CrawlType);
+                // 🔧 BỔ SUNG 2 THAM SỐ BỊ THIẾU
+                AddParam(cmd, "@ImageAttr", config.ImageAttr);
+                AddParam(cmd, "@TourDetailAttr", config.TourDetailAttr);
+                AddParam(cmd, "@LoadMoreButtonSelector", config.LoadMoreButtonSelector);
+                AddParam(cmd, "@LoadMoreType", config.LoadMoreType);
+                AddParam(cmd, "@PagingType", config.PagingType);
 
-            command.Parameters.AddWithValue("@Id", id);
-            command.Parameters.AddWithValue("@BaseDomain", config.BaseDomain);
-            command.Parameters.AddWithValue("@BaseUrl", config.BaseUrl);
-            command.Parameters.AddWithValue("@TourListSelector", config.TourListSelector);
-            command.Parameters.AddWithValue("@TourName", config.TourName);
-            command.Parameters.AddWithValue("@TourCode", config.TourCode);
-            command.Parameters.AddWithValue("@TourPrice", config.TourPrice);
-            command.Parameters.AddWithValue("@ImageUrl", config.ImageUrl);
-            command.Parameters.AddWithValue("@DepartureLocation", config.DepartureLocation);
-            command.Parameters.AddWithValue("@DepartureDate", config.DepartureDate);
-            command.Parameters.AddWithValue("@TourDuration", config.TourDuration);
-            command.Parameters.AddWithValue("@TourDetailUrl", config.TourDetailUrl);
-            command.Parameters.AddWithValue("@TourDetailDayTitle", config.TourDetailDayTitle);
-            command.Parameters.AddWithValue("@TourDetailDayContent", config.TourDetailDayContent);
-            command.Parameters.AddWithValue("@TourDetailNote", config.TourDetailNote);
-            command.Parameters.AddWithValue("@CrawlType", config.CrawlType);
-            command.Parameters.AddWithValue("@LoadMoreButtonSelector", config.LoadMoreButtonSelector);
-            command.Parameters.AddWithValue("@LoadMoreType", config.LoadMoreType);
-            command.Parameters.AddWithValue("@PagingType", config.PagingType);
-
-            command.ExecuteNonQuery();
-
-            return Ok(new { message = "Cập nhật cấu hình thành công!" });
+                var affected = cmd.ExecuteNonQuery();
+                return Ok(new { message = "Cập nhật cấu hình thành công!", affected });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = "Update failed", error = ex.Message });
+            }
         }
 
-        // DELETE: api/config/pageconfigs/{id}
         [HttpDelete("pageconfigs/{id}")]
         public IActionResult DeletePageConfig(int id)
         {
             using var connection = new MySqlConnection(_connectionString);
             connection.Open();
 
-            var query = "DELETE FROM page_config WHERE id = @Id";
+            const string sql = "DELETE FROM page_config WHERE id = @Id";
+            using var cmd = new MySqlCommand(sql, connection);
+            AddParam(cmd, "@Id", id);
+            var affected = cmd.ExecuteNonQuery();
 
-            using var command = new MySqlCommand(query, connection);
-            command.Parameters.AddWithValue("@Id", id);
-
-            command.ExecuteNonQuery();
-
-            return Ok(new { message = "Deleted successfully" });
+            return Ok(new { message = "Deleted successfully", affected });
         }
     }
 }

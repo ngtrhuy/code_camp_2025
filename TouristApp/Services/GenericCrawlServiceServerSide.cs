@@ -76,8 +76,6 @@ namespace TouristApp.Services
                                 DepartureDates = GetMultipleTexts(node, config.DepartureDate),
                                 Duration = GetText(node, config.TourDuration),
                                 TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
-
-                                // ✅ KHÔNG tạo Uri trực tiếp nữa
                                 SourceSite = hostOnly
                             };
 
@@ -232,7 +230,7 @@ namespace TouristApp.Services
             }
         }
 
-        // ================== Helpers: URL/DOMAIN ==================
+        // ============== URL/DOMAIN helpers ==============
         private static string NormalizeBaseDomain(string baseDomain)
         {
             var s = (baseDomain ?? "").Trim();
@@ -240,16 +238,13 @@ namespace TouristApp.Services
             if (!s.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
                 !s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 s = "https://" + s;
-            // bỏ dấu '/' cuối
-            s = s.TrimEnd('/');
-            return s;
+            return s.TrimEnd('/');
         }
 
         private static string GetHost(string normalizedBaseDomain)
         {
             if (Uri.TryCreate(normalizedBaseDomain, UriKind.Absolute, out var u) && !string.IsNullOrEmpty(u.Host))
                 return u.Host.ToLowerInvariant();
-            // fallback tách tay
             return normalizedBaseDomain
                 .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
@@ -261,13 +256,12 @@ namespace TouristApp.Services
         {
             if (string.IsNullOrWhiteSpace(maybeRelative)) return normalizedBaseDomain;
             if (Uri.TryCreate(maybeRelative, UriKind.Absolute, out var abs)) return abs.ToString();
-            // relative
             var root = normalizedBaseDomain.TrimEnd('/');
             var rel = maybeRelative.TrimStart('/');
             return $"{root}/{rel}";
         }
 
-        // ======== Anchor regex ========
+        // ============== Anchor/notes helpers ==============
         private static readonly Regex AnchorRegex = new Regex(
             @"(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<inc>\b(DỊCH\s*VỤ\s*BAO\s*GỒM|GIÁ\s*BAO\s*GỒM|INCLUDED?|INCLUDE)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
           + @"|(?:(?<=^)|(?<=[\s\(\[\{""'“”‘’\-–—,;:]))(?<exc>\b(DỊCH\s*VỤ\s*KHÔNG\s*BAO\s*GỒM|GIÁ\s*KHÔNG\s*BAO\s*GỒM|KHÔNG\s*BAO\s*GỒM|CHƯA\s*BAO\s*GỒM|NOT\s*INCLUDED?|EXCLUDED?)\b)(?=\s*[:;\-–—\.\""“”'’»)\]]|\s*$)"
@@ -384,7 +378,6 @@ namespace TouristApp.Services
             {
                 var s = line;
 
-                // Dòng chỉ là anchor
                 var onlyAnchor = AnchorRegex.Match(s);
                 if (onlyAnchor.Success && onlyAnchor.Index == 0 && onlyAnchor.Length == s.Length)
                 {
@@ -392,7 +385,6 @@ namespace TouristApp.Services
                     continue;
                 }
 
-                // Nhiều anchor trong một dòng
                 var matches = AnchorRegex.Matches(s);
                 if (matches.Count == 0)
                 {
@@ -557,7 +549,8 @@ namespace TouristApp.Services
 
             return null;
         }
-        // ================== Helpers khác ==================
+
+        // misc text helpers
         private static string ToAsciiLower(string? s)
         {
             if (string.IsNullOrEmpty(s)) return "";

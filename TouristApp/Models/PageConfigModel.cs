@@ -25,8 +25,7 @@
         public DateTime CreatedAt { get; set; }
         public string LoadMoreButtonSelector { get; set; } = string.Empty;
         public string LoadMoreType { get; set; } = "class";
-        /*   public int LoadMoreButtonIndex { get; set; } = -1; */
+
 
     }
 }
-    
