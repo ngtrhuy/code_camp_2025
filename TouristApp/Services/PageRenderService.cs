@@ -73,7 +73,39 @@ namespace TouristApp.Services
                 using var driver = new ChromeDriver(options);
                 driver.Navigate().GoToUrl(url);
                 await Task.Delay(1500);
-                // ... phần load more giữ nguyên
+                // Nếu có selector → click N lần
+                if (!string.IsNullOrWhiteSpace(loadMoreSelector) && loadMoreClicks > 0)
+                {
+                    for (int i = 0; i < loadMoreClicks; i++)
+                    {
+                        try
+                        {
+                            IWebElement btn;
+                            var sel = loadMoreSelector.Trim();
+                            if (sel.StartsWith("//"))       // XPath
+                                btn = driver.FindElement(By.XPath(sel));
+                            else if (sel.StartsWith(".") || sel.Contains(" ")) // CSS
+                                btn = driver.FindElement(By.CssSelector(sel));
+                            else                              // class name ngắn gọn
+                                btn = driver.FindElement(By.ClassName(sel.TrimStart('.')));
+
+                            ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView({block:'center'});", btn);
+                            btn.Click();
+                            await Task.Delay(1200); // đợi trang load thêm
+                        }
+                        catch { break; }
+                    }
+                }
+                else
+                {
+                    // Không có nút → thử scroll vài lần để kích hoạt lazy load
+                    for (int i = 0; i < 3; i++) { ScrollToBottom(driver); await Task.Delay(800); }
+                }
+                res.Html = driver.PageSource;
+                res.FinalUrl = driver.Url;
+                res.BaseDomain = GetBaseDomain(res.FinalUrl);
+                res.RenderModeUsed = "client_side";
+                res.Logs.Add("Client-side: captured PageSource via Selenium (with load-more if provided).");
                 res.Html = driver.PageSource;
                 res.FinalUrl = driver.Url;
                 res.BaseDomain = GetBaseDomain(res.FinalUrl);

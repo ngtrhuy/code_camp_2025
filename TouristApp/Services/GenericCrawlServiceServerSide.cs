@@ -574,6 +574,7 @@ namespace TouristApp.Services
         public Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config)
         {
             throw new NotImplementedException();
+        }
         private static string ToAscii(string? s)
         {
             if (string.IsNullOrWhiteSpace(s)) return "";

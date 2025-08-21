@@ -422,5 +422,9 @@ namespace TouristApp.Services
             return $"{baseDomain.TrimEnd('/')}/{url.TrimStart('/')}";
         }
 
+        public Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

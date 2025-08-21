@@ -433,9 +433,14 @@ namespace TouristApp.Controllers
                 itemAncestorXPath = CssToXPath(req.Ancestor!.Css!);
                 itemAncestor = doc.DocumentNode.SelectSingleNode(itemAncestorXPath);
             }
-            else // Auto
+            else if (req.Ancestor?.Auto == true) // Auto detect
             {
                 (itemAncestor, itemAncestorXPath) = AutoDetectItemAncestor(doc, selected);
+            }
+            else // Manual - selected element is the container itself
+            {
+                itemAncestor = selected;
+                itemAncestorXPath = BuildRepeatingXPath(selected);
             }
 
             if (itemAncestor == null)
