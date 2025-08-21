@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MySql.Data.MySqlClient;
 using TouristApp.Models;
 using TouristApp.Services;
 
@@ -21,38 +22,48 @@ namespace TouristApp.Controllers
             _history = history;
         }
 
-        // ✅ Crawl và lưu DB (không dùng history)
+        // ✅ Crawl và lưu DB, cho phép nhập số lượng tour qua ?limit=
+        // GET /api/crawl/crawl-and-save/1?limit=50
         [HttpGet("crawl-and-save/{id}")]
-        public IActionResult CrawlAndSave(int id)
+        public IActionResult CrawlAndSave(int id, [FromQuery] int limit)
         {
+            if (limit <= 0) return BadRequest("limit phải > 0");
+
             var config = GetConfigById(id);
             if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
 
-            var service = new SeleniumCrawlService();
-            var tours = service.CrawlToursWithSelenium(config);
+            // Đã sửa ở đây
+            var service = new SeleniumCrawlService(_tourRepository);
+            var tours = service.CrawlToursWithSelenium(config, limit);
             int savedCount = _tourRepository.SaveTours(tours);
 
             return Ok(new
             {
                 message = "✅ Đã crawl và lưu vào DB",
+                requested = limit,
                 totalCrawled = tours.Count,
                 totalSaved = savedCount
             });
         }
 
-        // ✅ Crawl không lưu DB (không dùng history)
+        // ✅ Crawl không lưu DB, cho phép nhập số lượng tour qua ?limit=
+        // GET /api/crawl/crawl-only/1?limit=10
         [HttpGet("crawl-only/{id}")]
-        public IActionResult GetToursOnly(int id)
+        public IActionResult GetToursOnly(int id, [FromQuery] int limit)
         {
+            if (limit <= 0) return BadRequest("limit phải > 0");
+
             var config = GetConfigById(id);
             if (config == null) return NotFound("❌ Không tìm thấy cấu hình crawl");
 
-            var service = new SeleniumCrawlService();
-            var tours = service.CrawlToursWithSelenium(config);
+            // Đã sửa ở đây
+            var service = new SeleniumCrawlService(_tourRepository);
+            var tours = service.CrawlToursWithSelenium(config, limit);
 
             return Ok(new
             {
                 message = "✅ Đã crawl dữ liệu thành công",
+                requested = limit,
                 totalCrawled = tours.Count,
                 tours
             });
@@ -62,10 +73,10 @@ namespace TouristApp.Controllers
         private PageConfigModel? GetConfigById(int id)
         {
             PageConfigModel? config = null;
-            using (var conn = new MySql.Data.MySqlClient.MySqlConnection(_connectionString))
+            using (var conn = new MySqlConnection(_connectionString))
             {
                 conn.Open();
-                var cmd = new MySql.Data.MySqlClient.MySqlCommand("SELECT * FROM page_config WHERE id = @Id", conn);
+                var cmd = new MySqlCommand("SELECT * FROM page_config WHERE id = @Id", conn);
                 cmd.Parameters.AddWithValue("@Id", id);
 
                 using var reader = cmd.ExecuteReader();
@@ -74,33 +85,35 @@ namespace TouristApp.Controllers
                     config = new PageConfigModel
                     {
                         Id = Convert.ToInt32(reader["id"]),
-                        BaseDomain = reader["base_domain"].ToString()!,
-                        BaseUrl = reader["base_url"].ToString()!,
-                        TourName = reader["tour_name"].ToString()!,
-                        TourCode = reader["tour_code"].ToString()!,
-                        TourPrice = reader["tour_price"].ToString()!,
-                        ImageUrl = reader["image_url"].ToString()!,
-                        DepartureLocation = reader["departure_location"].ToString()!,
-                        DepartureDate = reader["departure_date"].ToString()!,
-                        TourDuration = reader["tour_duration"].ToString()!,
-                        PagingType = reader["paging_type"].ToString()!,
-                        TourDetailUrl = reader["tour_detail_url"].ToString()!,
-                        TourDetailDayTitle = reader["tour_detail_day_title"].ToString()!,
-                        TourDetailDayContent = reader["tour_detail_day_content"].ToString()!,
-                        TourDetailNote = reader["tour_detail_note"].ToString()!,
-                        CrawlType = reader["crawl_type"].ToString()!,
-                        TourListSelector = reader["tour_list_selector"].ToString()!,
-                        ImageAttr = reader["image_attr"].ToString()!,
-                        TourDetailAttr = reader["tour_detail_attr"].ToString()!,
-                        LoadMoreButtonSelector = reader["load_more_button_selector"].ToString()!,
-                        LoadMoreType = reader["load_more_type"].ToString()!
+                        BaseDomain = reader["base_domain"]?.ToString() ?? string.Empty,
+                        BaseUrl = reader["base_url"]?.ToString() ?? string.Empty,
+                        TourName = reader["tour_name"]?.ToString() ?? string.Empty,
+                        TourCode = reader["tour_code"]?.ToString() ?? string.Empty,
+                        TourPrice = reader["tour_price"]?.ToString() ?? string.Empty,
+                        ImageUrl = reader["image_url"]?.ToString() ?? string.Empty,
+                        DepartureLocation = reader["departure_location"]?.ToString() ?? string.Empty,
+                        DepartureDate = reader["departure_date"]?.ToString() ?? string.Empty,
+                        TourDuration = reader["tour_duration"]?.ToString() ?? string.Empty,
+                        PagingType = reader["paging_type"]?.ToString() ?? "none",
+                        TourDetailUrl = reader["tour_detail_url"]?.ToString() ?? string.Empty,
+                        TourDetailDayTitle = reader["tour_detail_day_title"]?.ToString() ?? string.Empty,
+                        TourDetailDayContent = reader["tour_detail_day_content"]?.ToString() ?? string.Empty,
+                        TourDetailNote = reader["tour_detail_note"]?.ToString() ?? string.Empty,
+                        CrawlType = reader["crawl_type"]?.ToString() ?? string.Empty,
+                        TourListSelector = reader["tour_list_selector"]?.ToString() ?? string.Empty,
+                        ImageAttr = reader["image_attr"]?.ToString() ?? "src",
+                        TourDetailAttr = reader["tour_detail_attr"]?.ToString() ?? "href",
+                        LoadMoreButtonSelector = reader["load_more_button_selector"]?.ToString() ?? string.Empty,
+                        LoadMoreType = reader["load_more_type"]?.ToString() ?? "class"
                     };
                 }
             }
             return config;
         }
 
-        // ✅ Generic crawl (không dùng history)
+        // ====== Các endpoint generic khác của bạn (giữ nguyên nếu đang dùng) ======
+
+        // ✅ Generic crawl từ config (dùng service factory)
         [HttpGet("{configId}")]
         public async Task<IActionResult> Crawl(int configId)
         {
