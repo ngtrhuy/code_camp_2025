@@ -140,7 +140,7 @@ namespace TouristApp.Controllers
             var data = LoadPreview(historyId);
             var mapped = data.Select((t, idx) => new Dictionary<string, object?>
             {
-                ["id"] = idx + 1, // preview chưa có id DB, dùng index
+                ["id"] = idx + 1,
                 ["tour_name"] = t.TourName,
                 ["tour_code"] = t.TourCode,
                 ["price"] = t.Price,
@@ -148,9 +148,14 @@ namespace TouristApp.Controllers
                 ["departure_location"] = t.DepartureLocation,
                 ["duration"] = t.Duration,
                 ["tour_detail_url"] = t.TourDetailUrl,
-                ["departure_dates"] = t.DepartureDates,   // list<string>
-                ["important_notes"] = t.ImportantNotes,   // dict<string,string>
-                ["source_site"] = t.SourceSite
+                ["departure_dates"] = t.DepartureDates,
+                ["important_notes"] = t.ImportantNotes,
+                ["source_site"] = t.SourceSite,
+                // ➕ LỊCH TRÌNH (list các object có day_title/day_content)
+                ["schedule"] = t.Schedule?.Select(d => new {
+                    day_title = d.DayTitle,
+                    day_content = d.DayContent
+                }).ToList()
             }).ToList();
 
             return Ok(new { total = mapped.Count, tours = mapped });
