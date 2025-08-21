@@ -553,5 +553,10 @@ namespace TouristApp.Services
             t = t.Replace("\u00A0", " ");
             return t.Trim();
         }
+
+        public Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

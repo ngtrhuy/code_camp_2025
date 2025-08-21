@@ -19,6 +19,7 @@ namespace TouristApp
             builder.Services.AddHttpClient<PystravelCrawlService>();
             builder.Services.AddHttpClient<LuaVietTourCrawler>();
             builder.Services.AddScoped<IHistoryRepository, HistoryRepository>();
+            builder.Services.AddSingleton<IPageRenderService, PageRenderService>();
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowAll",

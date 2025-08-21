@@ -6,5 +6,7 @@ namespace TouristApp.Services
     {
         Task<List<StandardTourModel>> CrawlFromPageConfigAsync(int configId);
         Task<PageConfigModel?> LoadPageConfig(int id);
+
+        Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config);
     }
 } 

@@ -20,25 +20,28 @@ namespace TouristApp.Services
         {
             var config = await LoadPageConfig(configId);
             if (config == null) return new List<StandardTourModel>();
+            return await CrawlFromConfigAsync(config);
+        }
 
+        // NEW
+        public async Task<List<StandardTourModel>> CrawlFromConfigAsync(PageConfigModel config)
+        {
             List<StandardTourModel> tours = new();
 
-            // ✅ Crawl danh sách bằng Selenium (client-side)
             var options = new ChromeOptions();
-            options.AddArgument("--headless");
+            options.AddArgument("--headless=new");
             options.AddArgument("--disable-gpu");
             options.AddArgument("--no-sandbox");
 
             using var driver = new ChromeDriver(options);
             driver.Navigate().GoToUrl(config.BaseUrl);
 
-            // Xử lý phân trang động (load_more, carousel)
+            // Phân trang động (load_more, carousel)
             if (config.PagingType == "load_more" || config.PagingType == "carousel")
             {
-                await HandleDynamicPaging(driver, config.PagingType);
+                await HandleDynamicPagingAsync(driver, config);
             }
 
-            // Lấy HTML sau khi JS đã render
             var html = driver.PageSource;
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -63,7 +66,6 @@ namespace TouristApp.Services
                             Duration = GetText(node, config.TourDuration),
                             TourDetailUrl = GetAttribute(node, config.TourDetailUrl, config.TourDetailAttr),
                         };
-
                         tours.Add(tour);
                     }
                     catch (Exception ex)
@@ -73,14 +75,14 @@ namespace TouristApp.Services
                 }
             }
 
-            // ✅ Crawl chi tiết bằng Selenium
+            // Crawl chi tiết
             foreach (var tour in tours)
             {
                 if (!string.IsNullOrEmpty(tour.TourDetailUrl))
                 {
                     var fullUrl = tour.TourDetailUrl.StartsWith("http")
                         ? tour.TourDetailUrl
-                        : $"{config.BaseDomain.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
+                        : $"{config.BaseDomain?.TrimEnd('/')}/{tour.TourDetailUrl.TrimStart('/')}";
 
                     await CrawlDetailWithSeleniumAsync(tour, fullUrl, config);
                 }
@@ -89,7 +91,7 @@ namespace TouristApp.Services
             return tours;
         }
 
-        private async Task HandleDynamicPaging(ChromeDriver driver, string pagingType)
+        private async Task HandleDynamicPagingAsync(ChromeDriver driver, PageConfigModel config)
         {
             int maxLoad = 10;
             int loadCount = 0;
@@ -98,39 +100,58 @@ namespace TouristApp.Services
             {
                 try
                 {
-                    // Scroll xuống cuối trang để load nội dung nếu có lazy load
                     ((IJavaScriptExecutor)driver).ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
-                    await Task.Delay(2000); // đợi JS tải xong
+                    await Task.Delay(1200);
 
-                    if (pagingType == "load_more")
+                    bool acted = false;
+
+                    // Ưu tiên click theo selector từ DB nếu có
+                    if (!string.IsNullOrWhiteSpace(config.LoadMoreButtonSelector))
                     {
-                        // Tìm nút "Xem thêm" hoặc "Load more"
-                        var loadMoreButton = driver.FindElements(By.XPath("//button[contains(text(),'Xem thêm') or contains(text(),'Load more') or contains(text(),'Tải thêm')]")).FirstOrDefault();
-                        if (loadMoreButton != null && loadMoreButton.Displayed)
+                        IReadOnlyCollection<IWebElement> btns;
+                        if (string.Equals(config.LoadMoreType, "css", StringComparison.OrdinalIgnoreCase))
                         {
-                            loadMoreButton.Click();
-                            await Task.Delay(2000);
+                            btns = driver.FindElements(By.CssSelector(config.LoadMoreButtonSelector));
                         }
-                        else
+                        else // mặc định dùng XPath/class-text fallback
                         {
-                            break;
+                            btns = driver.FindElements(By.XPath(config.LoadMoreButtonSelector));
+                        }
+
+                        var btn = btns.FirstOrDefault(e => e.Displayed && e.Enabled);
+                        if (btn != null)
+                        {
+                            btn.Click();
+                            acted = true;
+                            await Task.Delay(1200);
                         }
                     }
-                    else if (pagingType == "carousel")
+                    else
                     {
-                        // Xử lý carousel/slider
-                        var nextButton = driver.FindElements(By.XPath("//button[contains(@class,'next') or contains(@class,'arrow-right')]")).FirstOrDefault();
-                        if (nextButton != null && nextButton.Displayed)
+                        // Fallback theo text như code cũ
+                        if (config.PagingType == "load_more")
                         {
-                            nextButton.Click();
-                            await Task.Delay(2000);
+                            var loadMoreButton = driver.FindElements(By.XPath("//button[contains(text(),'Xem thêm') or contains(text(),'Load more') or contains(text(),'Tải thêm')]")).FirstOrDefault();
+                            if (loadMoreButton != null && loadMoreButton.Displayed)
+                            {
+                                loadMoreButton.Click();
+                                acted = true;
+                                await Task.Delay(1200);
+                            }
                         }
-                        else
+                        else if (config.PagingType == "carousel")
                         {
-                            break;
+                            var nextButton = driver.FindElements(By.XPath("//button[contains(@class,'next') or contains(@class,'arrow-right')]")).FirstOrDefault();
+                            if (nextButton != null && nextButton.Displayed)
+                            {
+                                nextButton.Click();
+                                acted = true;
+                                await Task.Delay(1200);
+                            }
                         }
                     }
 
+                    if (!acted) break;
                     loadCount++;
                 }
                 catch (Exception ex)
@@ -153,7 +174,7 @@ namespace TouristApp.Services
         private async Task CrawlDetailWithSeleniumAsync(StandardTourModel tour, string url, PageConfigModel config)
         {
             var options = new ChromeOptions();
-            options.AddArgument("--headless");
+            options.AddArgument("--headless=new");
             options.AddArgument("--disable-gpu");
             options.AddArgument("--no-sandbox");
 
@@ -161,7 +182,7 @@ namespace TouristApp.Services
             {
                 using var driver = new ChromeDriver(options);
                 driver.Navigate().GoToUrl(url);
-                await Task.Delay(2000); // đợi render JS
+                await Task.Delay(1200);
 
                 var html = driver.PageSource;
                 var doc = new HtmlDocument();
@@ -177,7 +198,6 @@ namespace TouristApp.Services
 
         private void ParseTourDetailFromHtml(HtmlDocument doc, StandardTourModel tour, PageConfigModel config)
         {
-            // 📅 Lịch trình
             var days = doc.DocumentNode.SelectNodes(config.TourDetailDayTitle);
             var contents = doc.DocumentNode.SelectNodes(config.TourDetailDayContent);
 
@@ -195,7 +215,6 @@ namespace TouristApp.Services
 
             var noteRoots = doc.DocumentNode.SelectNodes(config.TourDetailNote);
 
-            // Nếu là một đoạn block duy nhất
             if (noteRoots == null || noteRoots.Count == 0)
             {
                 var noteRoot = doc.DocumentNode.SelectSingleNode(config.TourDetailNote);
@@ -228,7 +247,6 @@ namespace TouristApp.Services
                         tour.ImportantNotes[key] = tour.ImportantNotes[key].Trim();
                 }
             }
-            // Nếu là nhiều block khác nhau
             else
             {
                 foreach (var noteRoot in noteRoots)
@@ -277,10 +295,12 @@ namespace TouristApp.Services
                     ImageAttr = SafeGetString(reader, "image_attr"),
                     TourDetailAttr = SafeGetString(reader, "tour_detail_attr"),
                     PagingType = SafeGetString(reader, "paging_type"),
+                    LoadMoreButtonSelector = SafeGetString(reader, "load_more_button_selector"),
+                    LoadMoreType = SafeGetString(reader, "load_more_type"),
                 };
             }
 
             return null;
         }
     }
-} 
+}
