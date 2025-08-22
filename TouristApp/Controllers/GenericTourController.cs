@@ -12,63 +12,11 @@ namespace TouristApp.Controllers
     [Route("api/[controller]")]
     public class GenericTourController : ControllerBase
     {
-        private readonly DeVietTourCrawler _crawler;
-        private readonly DeVietTourDataInserter _inserter;
+
         private readonly string _connectionString = "server=localhost;database=code_camp_2025;user=root;password=;";
 
-        public GenericTourController()
-        {
-            _crawler = new DeVietTourCrawler();
-            _inserter = new DeVietTourDataInserter(_connectionString);
-        }
 
-        [HttpGet("crawl")]
-        public async Task<IActionResult> CrawlTours()
-        {
-            var urls = new List<string>
-            {
-                "https://deviet.vn/du-lich/tour-du-lich-chau-au-tron-goi/",
-                "https://deviet.vn/gioi-thieu-tour-ghep-du-lich-chau-au/",
-                "https://deviet.vn/du-lich/tour-nuoc-ngoai/"
-            };
 
-            var allTours = new List<StandardTourModel>();
-
-            foreach (var url in urls)
-            {
-                var tours = await _crawler.CrawlToursAsync(url);
-                allTours.AddRange(tours);
-            }
-
-            return Ok(allTours);
-        }
-
-        [HttpPost("crawl-and-insert")]
-        public async Task<IActionResult> CrawlAndInsert()
-        {
-            var urls = new List<string>
-            {
-                "https://deviet.vn/du-lich/tour-du-lich-chau-au-tron-goi/",
-                "https://deviet.vn/gioi-thieu-tour-ghep-du-lich-chau-au/",
-                "https://deviet.vn/du-lich/tour-nuoc-ngoai/"
-            };
-
-            var allTours = new List<StandardTourModel>();
-
-            foreach (var url in urls)
-            {
-                var tours = await _crawler.CrawlToursAsync(url);
-                allTours.AddRange(tours);
-            }
-
-            await _inserter.InsertToursAsync(allTours);
-
-            return Ok(new
-            {
-                Message = "Crawl và insert thành công",
-                InsertedCount = allTours.Count
-            });
-        }
 
         // THÊM FILTER theo site và trả sourceSite
         [HttpGet("tours")]
